@@ -29,15 +29,13 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
-// ADAPTADOR FIRESTORE BLINDADO PARA WHATSAPP
+// ADAPTADOR FIRESTORE ANTIBUFCLE
 async function useFirestoreAuthState() {
     const writeData = async (data, id) => {
         try {
             const jsonString = JSON.stringify(data, BufferJSON.replacer);
             await setDoc(doc(db, 'mediatv_data', `wa_session_${id}`), { data: jsonString });
-        } catch (e) {
-            console.error("Error escribiendo sesión:", e);
-        }
+        } catch (e) {}
     };
 
     const readData = async (id) => {
@@ -56,8 +54,11 @@ async function useFirestoreAuthState() {
         } catch (error) {}
     };
 
-    const storedCreds = await readData('creds');
-    const creds = storedCreds || initAuthCreds();
+    let creds = await readData('creds');
+    // Si no hay credenciales válidas o registradas, iniciamos unas limpias para forzar el QR
+    if (!creds || !creds.registered) {
+        creds = initAuthCreds();
+    }
 
     const state = {
         creds,
@@ -65,8 +66,7 @@ async function useFirestoreAuthState() {
             get: async (type, ids) => {
                 const data = {};
                 for (const id of ids) {
-                    let value = await readData(`${type}-${id}`);
-                    data[id] = value;
+                    data[id] = await readData(`${type}-${id}`);
                 }
                 return data;
             },
@@ -76,11 +76,8 @@ async function useFirestoreAuthState() {
                     for (const id of Object.keys(data[category])) {
                         const value = data[category][id];
                         const keyId = `${category}-${id}`;
-                        if (value) {
-                            tasks.push(writeData(value, keyId));
-                        } else {
-                            tasks.push(removeData(keyId));
-                        }
+                        if (value) tasks.push(writeData(value, keyId));
+                        else tasks.push(removeData(keyId));
                     }
                 }
                 await Promise.all(tasks);
