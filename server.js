@@ -174,7 +174,9 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
             
             if (!adminSnap.exists()) return;
             const dataAdmin = adminSnap.data();
-            const horaProgramadaPanel = dataAdmin.horaProgramada;
+            
+            // LECTURA INTELIGENTE: Soporta tanto horaProgramada como botConfig.hour
+            const horaProgramadaPanel = dataAdmin.horaProgramada || (dataAdmin.botConfig && dataAdmin.botConfig.hour);
 
             const esHoraDeCobro = matchesScheduledTime(horaProgramadaPanel, currentHours24, minutoActual);
 
@@ -188,7 +190,6 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                 let enviadosCount = 0;
 
                 for (const client of listaClientes) {
-                    // LLAVE SAGRADA: El USUARIO como identificador único inalterable (Soporta mayúsculas y minúsculas)
                     const usuario = getProp(client, ['USUARIO', 'Usuario', 'usuario']);
                     if (!usuario) continue;
 
@@ -377,3 +378,4 @@ app.get('/qr', (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Servidor listo en puerto ${PORT}`);
 });
+```[cite: 8]
