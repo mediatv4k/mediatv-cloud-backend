@@ -1,7 +1,6 @@
 {
   "name": "mediatv-cloud-backend",
   "version": "1.0.0",
-  "description": "Backend Cloud 24/7 para MediaTV con WhatsApp real",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -15,4 +14,3 @@
     "firebase": "^10.8.0"
   }
 }
-```[cite: 1, 7]
