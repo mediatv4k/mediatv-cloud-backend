@@ -185,6 +185,7 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                     const nombre = getProp(client, ['Nombre Completo', 'nombreCompleto', 'Nombre', 'nombre', 'NOMBRE']) || 'Cliente';
                     const fechaExpStr = getProp(client, ['Fecha Expira', 'fechaExpira', 'Expira', 'expira', 'VENCIMIENTO', 'FECHA_EXPIRA']);
                     const telRaw = getProp(client, ['Teléfono', 'telefono', 'Telefono', 'TELEFONO']);
+                    const password = getProp(client, ['CONTRASEÑA', 'Contraseña', 'password', 'clave', 'Clave']) || '';
 
                     if (!fechaExpStr) continue;
                     
@@ -212,11 +213,11 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
 
                     if (diffDays >= 0 && diffDays <= 5) {
                         tipoEnvio = "🟡 Por Vencer";
-                        mensaje = `¡Hola ${nombre}! 🤝 Te saluda el *Equipo de Soporte de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${usuario}*) vence en ${diffDays === 0 ? 'HOY' : diffDays + ' día(s)'}. ⏳\n\n💳 Puedes procesar tu renovación rápida y segura en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
+                        mensaje = `¡Hola ${nombre}! 👋 Te escribimos de MediaTV 4K.\n\nTu servicio para el usuario (${usuario}) está próximo a vencer en ${diffDays === 0 ? 'HOY' : diffDays + ' día(s)'} (Vence el: ${fechaExpStr}). 🚨\n\n💳 Evita interrupciones pagando directo en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 Tus Datos de Acceso:\n👤 Usuario: ${usuario}\n🔑 Contraseña: ${password}`;
                     } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
                         const diasVencido = Math.abs(diffDays);
                         tipoEnvio = "🔴 Vencido Reciente";
-                        mensaje = `¡Hola ${nombre}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
+                        mensaje = `¡Hola ${nombre}! 👋 Te escribimos de MediaTV 4K.\n\nTu servicio para el usuario (${usuario}) venció hace ${diasVencido} día(s) (Venció el: ${fechaExpStr}). 🚨\n\n💳 Reactiva tu cuenta pagando directo en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 Tus Datos de Acceso:\n👤 Usuario: ${usuario}\n🔑 Contraseña: ${password}`;
                     }
 
                     if (mensaje && telRaw) {
