@@ -29,20 +29,15 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
-// LIMPIEZA SEGURA DE RESIDUOS
 async function limpiarSesionesAntiguas() {
     try {
         const querySnapshot = await getDocs(collection(db, 'mediatv_data'));
-        const deletions = [];
         querySnapshot.forEach((document) => {
-            if (document.id.startsWith('wa_session_') && document.id !== 'wa_session_creds') {
-                // Mantenemos credenciales válidas
-            }
+            if (document.id.startsWith('wa_session_') && document.id !== 'wa_session_creds') {}
         });
     } catch (e) {}
 }
 
-// ADAPTADOR FIRESTORE BLINDADO (INTACTO)
 async function useFirestoreAuthState() {
     const writeData = async (data, id) => {
         try {
@@ -136,13 +131,13 @@ function getProp(obj, possibleKeys) {
 }
 
 // ==========================================
-// 3. CEREBRO DE COBRANZA CON HORA Y FECHA REAL DE VENEZUELA
+// 3. CEREBRO DE COBRANZA BLINDADO CON EL "USUARIO" COMO ID ÚNICO
 // ==========================================
 let botInterval = null;
 let ultimoMinutoProcesado = -1;
 
 function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
-    if (!horaProg) return currentMinutes === 0 || currentMinutes === 30; // Fallback
+    if (!horaProg) return currentMinutes === 0 || currentMinutes === 30;
     const clean = String(horaProg).toLowerCase().trim();
     
     if (/^\d{1,2}:\d{2}$/.test(clean)) {
@@ -164,7 +159,7 @@ function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
 
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 autónomo y sincronizado con VE activo...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 sincronizado con el ID de Usuario activo...", "success");
 
     botInterval = setInterval(async () => {
         try {
@@ -174,7 +169,6 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
             const minutoActual = horaActualVE.getMinutes();
             const claveMinutoUnica = `${currentHours24}-${minutoActual}`;
             
-            // Consultamos la hora configurada en Firestore
             const adminRef = doc(db, 'mediatv_data', 'admin');
             const adminSnap = await getDoc(adminRef);
             
@@ -187,18 +181,19 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
             if (esHoraDeCobro && ultimoMinutoProcesado !== claveMinutoUnica) {
                 ultimoMinutoProcesado = claveMinutoUnica;
                 const horaStrVE = String(currentHours24).padStart(2, '0') + ":" + String(minutoActual).padStart(2, '0');
-                addLog(`🚀 [BOT] Barrido inteligente activado por el panel a las ${horaStrVE} (VE)...`, "warning");
+                addLog(`🚀 [BOT] Barrido inteligente activado a las ${horaStrVE} (VE)...`, "warning");
                 
                 const listaClientes = dataAdmin.clientes || [];
-                
-                // CORRECCIÓN CRÍTICA: 'hoy' fijado exactamente en el calendario de Venezuela
                 const hoy = new Date(horaActualVE.getFullYear(), horaActualVE.getMonth(), horaActualVE.getDate());
                 let enviadosCount = 0;
 
                 for (const client of listaClientes) {
-                    const nombre = getProp(client, ['Nombre', 'nombre']) || 'Cliente';
-                    const usuario = getProp(client, ['Usuario', 'usuario']) || 'N/A';
-                    const fechaExpStr = getProp(client, ['Expira', 'expira', 'Fecha Expira', 'VENCIMIENTO']);
+                    // LLAVE SAGRADA: El USUARIO como identificador único inalterable
+                    const usuario = getProp(client, ['Usuario', 'usuario']);
+                    if (!usuario) continue; // Si no tiene usuario, se ignora por seguridad
+
+                    const nombre = getProp(client, ['Nombre Completo', 'nombreCompleto', 'Nombre', 'nombre']) || 'Cliente';
+                    const fechaExpStr = getProp(client, ['Fecha Expira', 'fechaExpira', 'Expira', 'expira', 'VENCIMIENTO']);
                     const telRaw = getProp(client, ['Teléfono', 'telefono', 'Telefono', 'TELEFONO']);
 
                     if (!fechaExpStr) continue;
@@ -240,7 +235,7 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                             const jid = telefono + "@s.whatsapp.net";
                             await whatsappClient.sendMessage(jid, { text: mensaje });
                             enviadosCount++;
-                            addLog(`✅ Cobro [${tipoEnvio}] enviado a ${nombre} (${telefono})`, "success");
+                            addLog(`✅ Cobro [${tipoEnvio}] enviado a ${nombre} (Usuario: ${usuario})`, "success");
                             await new Promise(r => setTimeout(r, 4000));
                         }
                     }
@@ -254,7 +249,7 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
 }
 
 // ==========================================
-// 4. MOTOR DE WHATSAPP (ESTABLE Y PERSISTENTE)
+// 4. MOTOR DE WHATSAPP
 // ==========================================
 addLog("🟢 Servidor Cloud 24/7 iniciado con éxito", "success");
 
