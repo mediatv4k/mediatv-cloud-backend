@@ -174,8 +174,7 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
             
             if (!adminSnap.exists()) return;
             const dataAdmin = adminSnap.data();
-            
-            const horaProgramadaPanel = dataAdmin.horaProgramada || (dataAdmin.botConfig && dataAdmin.botConfig.hour);
+            const horaProgramadaPanel = dataAdmin.horaProgramada;
 
             const esHoraDeCobro = matchesScheduledTime(horaProgramadaPanel, currentHours24, minutoActual);
 
@@ -189,12 +188,12 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                 let enviadosCount = 0;
 
                 for (const client of listaClientes) {
-                    const usuario = getProp(client, ['USUARIO', 'Usuario', 'usuario']);
+                    const usuario = getProp(client, ['Usuario', 'usuario']);
                     if (!usuario) continue;
 
-                    const nombre = getProp(client, ['NOMBRE', 'Nombre Completo', 'nombreCompleto', 'Nombre', 'nombre']) || 'Cliente';
-                    const fechaExpStr = getProp(client, ['FECHA_EXPIRA', 'fecha_expira', 'Fecha Expira', 'Expira', 'expira', 'VENCIMIENTO']);
-                    const telRaw = getProp(client, ['TELEFONO', 'Teléfono', 'Telefono', 'telefono']);
+                    const nombre = getProp(client, ['Nombre Completo', 'nombreCompleto', 'Nombre', 'nombre']) || 'Cliente';
+                    const fechaExpStr = getProp(client, ['Fecha Expira', 'fechaExpira', 'Expira', 'expira', 'VENCIMIENTO']);
+                    const telRaw = getProp(client, ['Teléfono', 'telefono', 'Telefono', 'TELEFONO']);
 
                     if (!fechaExpStr) continue;
                     
