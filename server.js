@@ -1,89 +1,89 @@
 const express = require('express');
 const cors = require('cors');
+const qrcode = require('qrcode');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+
 const app = express();
-
-app.use(express.json());
 app.use(cors());
+app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
+let sock;
+let qrCodeData = null;
+let isConnected = false;
 
-// Memoria para logs y cola de mensajes
-let cloudLogs = [];
-let messageQueue = [];
-let isProcessingQueue = false;
-
-// Simulación de envío con intervalo seguro (1 minuto / 60 segundos)
-async function processMessageQueue() {
-    if (isProcessingQueue || messageQueue.length === 0) return;
+async function connectToWhatsApp() {
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
-    isProcessingQueue = true;
-    const currentTask = messageQueue.shift();
+    sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: true
+    });
 
-    try {
-        console.log(`[QUEUE] 📤 Enviando mensaje a ${currentTask.telefono}... (Pausando 60s por seguridad)`);
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
         
-        // --- AQUÍ SE CONECTARÁ TU WHATSAPP (Librería Baileys o WWebJS) ---
-        // Simulamos el envío exitoso por ahora:
-        await new Promise(resolve => setTimeout(resolve, 1500)); 
+        if (qr) {
+            qrCodeData = await qrcode.toDataURL(qr);
+            isConnected = false;
+        }
 
-        const exitoLog = {
-            fecha: new Date().toLocaleString(),
-            nombre: currentTask.usuario || 'Cliente MediaTV',
-            telefono: currentTask.telefono,
-            exito: true,
-            detalle: 'Enviado con éxito (Fila Cloud)'
-        };
+        if (connection === 'close') {
+            const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+            isConnected = false;
+            if (shouldReconnect) {
+                connectToWhatsApp();
+            }
+        } else if (connection === 'open') {
+            console.log('✅ WhatsApp conectado exitosamente!');
+            isConnected = true;
+            qrCodeData = null;
+        }
+    });
 
-        cloudLogs.unshift(exitoLog);
-        if (cloudLogs.length > 30) cloudLogs.pop();
-
-    } catch (error) {
-        console.error(`[QUEUE ERROR] ❌ Falló el envío a ${currentTask.telefono}:`, error);
-        cloudLogs.unshift({
-            fecha: new Date().toLocaleString(),
-            nombre: currentTask.usuario || 'Error',
-            telefono: currentTask.telefono,
-            exito: false,
-            detalle: 'Error en pasarela de WhatsApp'
-        });
-    } finally {
-        // Pausa estricta de 60 segundos antes de procesar el siguiente mensaje
-        setTimeout(() => {
-            isProcessingQueue = false;
-            processMessageQueue();
-        }, 60000); 
-    }
+    sock.ev.on('creds.update', saveCreds);
 }
 
+connectToWhatsApp();
+
+// Ruta de estado
 app.get('/', (req, res) => {
-    res.json({ status: 'ONLINE', service: 'MediaTV Cloud Bot 24/7', queueLength: messageQueue.length });
-});
-
-// Endpoint que recibe la orden de cobro/notificación y la mete a la cola
-app.post('/api/enviar-notificacion', (req, res) => {
-    const { telefono, mensaje, usuario } = req.body;
-    
-    if (!telefono || !mensaje) {
-        return res.status(400).json({ success: false, error: 'Faltan datos obligatorios' });
-    }
-
-    // Agregamos a la cola de envío
-    messageQueue.push({ telefono, mensaje, usuario });
-    
-    // Disparamos el procesador si está inactivo
-    processMessageQueue();
-
-    res.json({ 
-        success: true, 
-        message: 'Mensaje agregado a la cola de la nube. Se enviará respetando el intervalo de seguridad.',
-        queuePosition: messageQueue.length
+    res.json({
+        status: isConnected ? "CONNECTED" : "WAITING_QR",
+        service: "MediaTV Cloud Bot 24/7",
+        qr: qrCodeData
     });
 });
 
-app.get('/api/logs', (req, res) => {
-    res.json({ success: true, logs: cloudLogs, queueActive: messageQueue.length });
+// Ruta para ver el QR directamente en el navegador
+app.get('/qr', (req, res) => {
+    if (isConnected) {
+        return res.send('<h2 style="font-family:sans-serif;text-align:center;margin-top:50px;">✅ WhatsApp ya está vinculado y activo.</h2>');
+    }
+    if (!qrCodeData) {
+        return res.send('<h2 style="font-family:sans-serif;text-align:center;margin-top:50px;">⏳ Generando código QR, recarga en 5 segundos...</h2>');
+    }
+    res.send(`<div style="display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column;font-family:sans-serif;">
+        <h2>Escanea este QR con tu WhatsApp</h2>
+        <img src="${qrCodeData}" style="width:300px;height:300px;border:1px solid #ccc;padding:10px;border-radius:8px;" />
+    </div>`);
+});
+
+// Ruta para enviar mensajes
+app.post('/send-message', async (req, res) => {
+    const { phone, message } = req.body;
+    if (!isConnected) {
+        return res.status(503).json({ error: "WhatsApp no está conectado todavía." });
+    }
+    try {
+        const jid = `${phone.replace(/\D/g, '')}@s.whatsapp.net`;
+        await sock.sendMessage(jid, { text: message });
+        res.json({ success: true, target: phone });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.listen(PORT, () => {
-    console.log(`✅ Servidor Cloud de MediaTV 4K corriendo en el puerto ${PORT}`);
+    console.log(`🚀 Servidor listo en el puerto ${PORT}`);
 });
