@@ -53,24 +53,28 @@ function addLog(msg, type = 'info') {
 }
 
 // ==========================================
-// 3. CEREBRO: BOT DE COBRANZA CLOUD 24/7 (DISPARO A LAS 3:45 PM)
+// 3. CEREBRO: BOT DE COBRANZA CLOUD 24/7 (DISPARO AUTOMÁTICO CADA HORA EN :00 y :30)
 // ==========================================
 let botInterval = null;
+let ultimoMinutoProcesado = -1;
+
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 a la escucha con Firebase...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 sincronizado con tu tabla de clientes...", "success");
 
     botInterval = setInterval(async () => {
         try {
             const now = new Date();
             const horaActualVE = new Date(now.getTime() - (4 * 60 * 60 * 1000));
-            const horaStr = String(horaActualVE.getHours()).padStart(2, '0') + ":" + String(horaActualVE.getMinutes()).padStart(2, '0');
+            const minutoActual = horaActualVE.getMinutes();
+            const horaStr = String(horaActualVE.getHours()).padStart(2, '0') + ":" + String(minutoActual).padStart(2, '0');
             
-            // ⚠️ HORA EXACTA DEL DISPARO PARA HOY: 3:45 PM ⚠️
-            const horaProgramada = "15:45"; 
+            // Dispara automáticamente en el minuto 00 o 30 de cada hora, evitando duplicados en el mismo minuto
+            const esHoraDeCobro = (minutoActual === 0 || minutoActual === 30);
 
-            if (horaStr === horaProgramada) {
-                addLog(`🚀 [BOT] Iniciando barrido de cobranza a las ${horaStr}...`, "warning");
+            if (esHoraDeCobro && ultimoMinutoProcesado !== minutoActual) {
+                ultimoMinutoProcesado = minutoActual;
+                addLog(`🚀 [BOT] Iniciando barrido automático de cartera a las ${horaStr} (VE)...`, "warning");
                 
                 // RUTA: mediatv_data > admin
                 const adminRef = doc(db, 'mediatv_data', 'admin');
@@ -89,20 +93,39 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                 let enviadosCount = 0;
 
                 for (const client of listaClientes) {
-                    const fechaExpStr = client["Fecha Expira"] || client.expira || client.FechaExpira || client.VENCIMIENTO;
+                    // LLAVE EXACTA VISTA EN TU TABLA: 'Expira' o 'expira'
+                    const fechaExpStr = client.Expira || client.expira || client["Fecha Expira"] || client.VENCIMIENTO;
                     if (!fechaExpStr) continue;
                     
-                    const fechaExp = new Date(fechaExpStr + "T00:00:00");
+                    // Soporte para formato DD-MM-YYYY o YYYY-MM-DD
+                    let fechaExp;
+                    if (fechaExpStr.includes('-') && fechaExpStr.split('-')[0].length === 4) {
+                        fechaExp = new Date(fechaExpStr + "T00:00:00");
+                    } else if (fechaExpStr.includes('-')) {
+                        const p = fechaExpStr.split('-');
+                        fechaExp = new Date(`${p[2]}-${p[1]}-${p[0]}T00:00:00`);
+                    } else if (fechaExpStr.includes('/')) {
+                        const p = fechaExpStr.split('/');
+                        fechaExp = new Date(`${p[2]}-${p[1]}-${p[0]}T00:00:00`);
+                    } else {
+                        continue;
+                    }
+
+                    if (isNaN(fechaExp.getTime())) continue;
+
                     const diffTime = fechaExp - hoy;
                     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
                     let mensaje = "";
                     let tipoEnvio = "";
 
+                    // REGLA 1: Por Vencer (1 a 5 días antes)
                     if (diffDays >= 0 && diffDays <= 5) {
                         tipoEnvio = "🟡 Por Vencer";
                         mensaje = `¡Hola ${client.Nombre || client.nombre || 'Cliente'}! 🤝 Te saluda el *Equipo de Soporte de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${client.Usuario || client.usuario}*) vence en ${diffDays === 0 ? 'HOY' : diffDays + ' día(s)'}. ⏳\n\n💳 Puedes procesar tu renovación rápida y segura en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${client.Usuario || client.usuario}`;
-                    } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
+                    } 
+                    // REGLA 2: Vencidos Recientes (1 a 5 días después)
+                    else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
                         const diasVencido = Math.abs(diffDays);
                         tipoEnvio = "🔴 Vencido Reciente";
                         mensaje = `¡Hola ${client.Nombre || client.nombre || 'Cliente'}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${client.Usuario || client.usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡No te quedes sin tu entretenimiento! Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${client.Usuario || client.usuario}`;
@@ -115,18 +138,18 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                             const jid = telefono + "@s.whatsapp.net";
                             await whatsappClient.sendMessage(jid, { text: mensaje });
                             enviadosCount++;
-                            addLog(`✅ Cobro [${tipoEnvio}] enviado a ${client.Nombre || 'Cliente'}`, "success");
+                            addLog(`✅ Cobro [${tipoEnvio}] enviado a ${client.Nombre || 'Cliente'} (${telefono})`, "success");
                             await new Promise(r => setTimeout(r, 4000));
                         }
                     }
                 }
-                addLog(`🎯 Barrido finalizado. Total cobros: ${enviadosCount}`, "success");
+                addLog(`🎯 Barrido finalizado. Total cobros despachados: ${enviadosCount}`, "success");
             }
         } catch (error) {
             addLog(`❌ [BOT ERROR] ${error.message}`, "error");
             console.error(error);
         }
-    }, 30000);
+    }, 20000); // Revisa el reloj cada 20 segundos
 }
 
 // ==========================================
