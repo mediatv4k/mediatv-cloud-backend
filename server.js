@@ -15,7 +15,7 @@ const {
 // 1. CONFIGURACIÓN DE FIREBASE
 // ==========================================
 const { initializeApp } = require('firebase/app');
-const { getFirestore, doc, getDoc, setDoc, deleteDoc } = require('firebase/firestore');
+const { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs } = require('firebase/firestore');
 
 const firebaseConfig = {
     apiKey: "AIzaSyCebbQ6exTiSQVsQk6Ub4hNZTZI0fNpxK8",
@@ -29,7 +29,24 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
-// ADAPTADOR FIRESTORE ANTIBUFCLE
+// FUNCIÓN PARA LIMPIAR BASURA DE SESIONES ANTERIORES EN FIRESTORE
+async function limpiarSesionesAntiguas() {
+    try {
+        const querySnapshot = await getDocs(collection(db, 'mediatv_data'));
+        const deletions = [];
+        querySnapshot.forEach((document) => {
+            if (document.id.startsWith('wa_session_')) {
+                deletions.push(deleteDoc(doc(db, 'mediatv_data', document.id)));
+            }
+        });
+        await Promise.all(deletions);
+        console.log("🧹 Sesiones antiguas de WhatsApp limpiadas de Firestore.");
+    } catch (e) {
+        console.log("Error limpiando sesiones:", e);
+    }
+}
+
+// ADAPTADOR FIRESTORE LIMPIO
 async function useFirestoreAuthState() {
     const writeData = async (data, id) => {
         try {
@@ -54,11 +71,7 @@ async function useFirestoreAuthState() {
         } catch (error) {}
     };
 
-    let creds = await readData('creds');
-    // Si no hay credenciales válidas o registradas, iniciamos unas limpias para forzar el QR
-    if (!creds || !creds.registered) {
-        creds = initAuthCreds();
-    }
+    const creds = initAuthCreds();
 
     const state = {
         creds,
@@ -131,7 +144,7 @@ let ultimoMinutoProcesado = -1;
 
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 con sincronización Firestore activo...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 activo con base limpia...", "success");
 
     botInterval = setInterval(async () => {
         try {
@@ -197,7 +210,7 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                     } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
                         const diasVencido = Math.abs(diffDays);
                         tipoEnvio = "🔴 Vencido Reciente";
-                        mensaje = `¡Hola ${nombre}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡No te quedes sin entretenimiento! Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
+                        mensaje = `¡Hola ${nombre}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${usuario}*) venció hace ${diasVencido} day(s). 🔴\n\n✨ ¡Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
                     }
 
                     if (mensaje && telRaw) {
@@ -221,12 +234,15 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
 }
 
 // ==========================================
-// 4. MOTOR DE WHATSAPP CON FIRESTORE AUTH
+// 4. MOTOR DE WHATSAPP CON LIMPIEZA AUTOMÁTICA
 // ==========================================
 addLog("🟢 Servidor Cloud 24/7 iniciado con éxito", "success");
 
 async function startWhatsApp() {
     try {
+        // Limpiamos cualquier residuo viejo en Firestore antes de arrancar el socket
+        await limpiarSesionesAntiguas();
+
         const { state, saveCreds } = await useFirestoreAuthState();
         const { version } = await fetchLatestBaileysVersion();
 
@@ -248,7 +264,7 @@ async function startWhatsApp() {
             if (qr) {
                 qrImageBase64 = await qrcode.toDataURL(qr, { margin: 1, width: 260 });
                 isConnected = false;
-                addLog("⚡ Código QR generado en espera de escaneo", "warning");
+                addLog("⚡ Código QR fresco generado y listo para escanear", "warning");
             }
 
             if (connection === 'close') {
@@ -300,7 +316,7 @@ app.get('/qr', (req, res) => {
             <html>
             <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#22c55e;font-family:sans-serif;text-align:center;">
                 <div style="font-size:45px;margin-bottom:8px;">✅</div>
-                <div style="font-size:16px;font-weight:800;letter-spacing:0.5px;">WhatsApp Vinculado (Sesión en la Nube)</div>
+                <div style="font-size:16px;font-weight:800;letter-spacing:0.5px;">WhatsApp Vinculado Exitosamente</div>
                 <div style="font-size:12px;color:#94a3b8;margin-top:4px;">Servidor Cloud 24/7 Activo</div>
             </body>
             </html>
@@ -314,7 +330,7 @@ app.get('/qr', (req, res) => {
             <head><meta http-equiv="refresh" content="3"></head>
             <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#38bdf8;font-family:sans-serif;text-align:center;">
                 <div style="font-size:30px;margin-bottom:8px;">⏳</div>
-                <div style="font-size:14px;font-weight:700;">Generando código QR limpio...</div>
+                <div style="font-size:14px;font-weight:700;">Limpiando base de datos y generando QR...</div>
             </body>
             </html>
         `);
