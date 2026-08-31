@@ -29,11 +29,15 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
-// ADAPTADOR DE SESIÓN PERSISTENTE EN FIRESTORE (ADIÓS A LOS REINICIOS DE RENDER)
-function useFirestoreAuthState() {
+// ADAPTADOR FIRESTORE BLINDADO PARA WHATSAPP
+async function useFirestoreAuthState() {
     const writeData = async (data, id) => {
-        const jsonString = JSON.stringify(data, BufferJSON.replacer);
-        await setDoc(doc(db, 'mediatv_data', `wa_session_${id}`), { data: jsonString });
+        try {
+            const jsonString = JSON.stringify(data, BufferJSON.replacer);
+            await setDoc(doc(db, 'mediatv_data', `wa_session_${id}`), { data: jsonString });
+        } catch (e) {
+            console.error("Error escribiendo sesión:", e);
+        }
     };
 
     const readData = async (id) => {
@@ -52,45 +56,43 @@ function useFirestoreAuthState() {
         } catch (error) {}
     };
 
-    return {
-        state: {
-            creds: null,
-            keys: {
-                get: async (type, ids) => {
-                    const data = {};
-                    for (const id of ids) {
-                        let value = await readData(`${type}-${id}`);
-                        if (type === 'app-state-sync-key' && value) {
-                            // sync key handling
-                        }
-                        data[id] = value;
-                    }
-                    return data;
-                },
-                set: async (data) => {
-                    const tasks = [];
-                    for (const category of Object.keys(data)) {
-                        for (const id of Object.keys(data[category])) {
-                            const value = data[category][id];
-                            const keyId = `${category}-${id}`;
-                            if (value) {
-                                tasks.push(writeData(value, keyId));
-                            } else {
-                                tasks.push(removeData(keyId));
-                            }
-                        }
-                    }
-                    await Promise.all(tasks);
+    const storedCreds = await readData('creds');
+    const creds = storedCreds || initAuthCreds();
+
+    const state = {
+        creds,
+        keys: {
+            get: async (type, ids) => {
+                const data = {};
+                for (const id of ids) {
+                    let value = await readData(`${type}-${id}`);
+                    data[id] = value;
                 }
+                return data;
+            },
+            set: async (data) => {
+                const tasks = [];
+                for (const category of Object.keys(data)) {
+                    for (const id of Object.keys(data[category])) {
+                        const value = data[category][id];
+                        const keyId = `${category}-${id}`;
+                        if (value) {
+                            tasks.push(writeData(value, keyId));
+                        } else {
+                            tasks.push(removeData(keyId));
+                        }
+                    }
+                }
+                await Promise.all(tasks);
             }
-        },
-        saveCreds: async () => {
-            await writeData(authCreds, 'creds');
         }
     };
-}
 
-let authCreds = null;
+    return {
+        state,
+        saveCreds: () => writeData(state.creds, 'creds')
+    };
+}
 
 // ==========================================
 // 2. INICIALIZACIÓN DEL SERVIDOR WEB
@@ -132,7 +134,7 @@ let ultimoMinutoProcesado = -1;
 
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 con persistencia en Firestore activo...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 con sincronización Firestore activo...", "success");
 
     botInterval = setInterval(async () => {
         try {
@@ -198,7 +200,7 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                     } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
                         const diasVencido = Math.abs(diffDays);
                         tipoEnvio = "🔴 Vencido Reciente";
-                        mensaje = `¡Hola ${nombre}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡Notición! Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
+                        mensaje = `¡Hola ${nombre}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡No te quedes sin entretenimiento! Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
                     }
 
                     if (mensaje && telRaw) {
@@ -228,24 +230,7 @@ addLog("🟢 Servidor Cloud 24/7 iniciado con éxito", "success");
 
 async function startWhatsApp() {
     try {
-        const { state, saveCreds } = useFirestoreAuthState();
-        
-        const storedCreds = await (async () => {
-            const snap = await getDoc(doc(db, 'mediatv_data', 'wa_session_creds'));
-            if (!snap.exists()) return null;
-            return JSON.parse(snap.data().data, BufferJSON.reviver);
-        })();
-
-        if (storedCreds) {
-            authCreds = storedCreds;
-            state.creds = storedCreds;
-            addLog("📂 Sesión de WhatsApp recuperada desde Firebase Firestore", "success");
-        } else {
-            authCreds = initAuthCreds();
-            state.creds = authCreds;
-            addLog("⚡ Generando credenciales nuevas para WhatsApp...", "warning");
-        }
-
+        const { state, saveCreds } = await useFirestoreAuthState();
         const { version } = await fetchLatestBaileysVersion();
 
         sock = makeWASocket({
@@ -286,10 +271,7 @@ async function startWhatsApp() {
             }
         });
 
-        sock.ev.on('creds.update', async (newCreds) => {
-            authCreds = newCreds;
-            await saveCreds();
-        });
+        sock.ev.on('creds.update', saveCreds);
 
     } catch (err) {
         addLog(`❌ Error socket: ${err.message}`, "error");
@@ -335,7 +317,7 @@ app.get('/qr', (req, res) => {
             <head><meta http-equiv="refresh" content="3"></head>
             <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#38bdf8;font-family:sans-serif;text-align:center;">
                 <div style="font-size:30px;margin-bottom:8px;">⏳</div>
-                <div style="font-size:14px;font-weight:700;">Conectando con la sesión guardada en Firestore...</div>
+                <div style="font-size:14px;font-weight:700;">Generando código QR limpio...</div>
             </body>
             </html>
         `);
