@@ -19,6 +19,19 @@ const PORT = process.env.PORT || 10000;
 let sock = null;
 let qrImageBase64 = null;
 let isConnected = false;
+let cloudLogs = [];
+
+function getTimestamp() {
+    return new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+}
+
+function addLog(msg, type = 'info') {
+    const time = getTimestamp();
+    cloudLogs.unshift({ time, msg, type });
+    if (cloudLogs.length > 50) cloudLogs.pop();
+}
+
+addLog("🟢 Servidor Cloud 24/7 iniciado con éxito", "success");
 
 async function startWhatsApp() {
     try {
@@ -41,28 +54,30 @@ async function startWhatsApp() {
             const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
-                // Genera el QR optimizado sin márgenes excesivos
                 qrImageBase64 = await qrcode.toDataURL(qr, { margin: 1, width: 260 });
                 isConnected = false;
+                addLog("⚡ Código QR generado en espera de escaneo", "warning");
             }
 
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 isConnected = false;
+                addLog(`⚠️ Conexión en espera (${statusCode || 'Reintentando'})...`, "warning");
                 if (shouldReconnect) {
                     setTimeout(startWhatsApp, 3000);
                 }
             } else if (connection === 'open') {
                 isConnected = true;
                 qrImageBase64 = null;
+                addLog("✅ WhatsApp vinculado y autenticado correctamente", "success");
             }
         });
 
         sock.ev.on('creds.update', saveCreds);
 
     } catch (err) {
-        console.error("Error socket:", err);
+        addLog(`❌ Error socket: ${err.message}`, "error");
         setTimeout(startWhatsApp, 4000);
     }
 }
@@ -78,7 +93,12 @@ app.get(['/', '/status', '/api/status'], (req, res) => {
     });
 });
 
-// Pantalla QR 100% Encajada y Limpia para el Iframe
+// Endpoint de la Bitácora
+app.get(['/logs', '/api/logs'], (req, res) => {
+    res.json({ success: true, logs: cloudLogs });
+});
+
+// Pantalla QR dentro del Iframe
 app.get('/qr', (req, res) => {
     if (isConnected) {
         return res.send(`
@@ -123,6 +143,7 @@ async function sendWhatsAppMessage(phone, message) {
     const cleanPhone = String(phone).replace(/\D/g, '');
     const jid = `${cleanPhone}@s.whatsapp.net`;
     await sock.sendMessage(jid, { text: message });
+    addLog(`📩 Mensaje entregado a: ${cleanPhone}`, "success");
     return cleanPhone;
 }
 
@@ -150,6 +171,7 @@ app.post(['/send-message', '/send', '/api/send', '/webhook', '/api/webhook'], as
         }
         res.status(400).json({ error: "No se encontraron números válidos." });
     } catch (err) {
+        addLog(`❌ Error en envío: ${err.message}`, "error");
         res.status(500).json({ success: false, error: err.message });
     }
 });
