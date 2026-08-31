@@ -12,18 +12,18 @@ const {
 } = require('@whiskeysockets/baileys');
 
 // ==========================================
-// 1. CONFIGURACIÓN DE FIREBASE (¡PON TUS LLAVES AQUÍ!)
+// 1. CONFIGURACIÓN DE FIREBASE (LLAVES INTEGRADAS)
 // ==========================================
 const { initializeApp } = require('firebase/app');
-const { getFirestore, collection, getDocs } = require('firebase/firestore');
+const { getFirestore, doc, getDoc } = require('firebase/firestore');
 
 const firebaseConfig = {
-    apiKey: "TU_API_KEY_AQUI",
-    authDomain: "TU_AUTH_DOMAIN_AQUI",
-    projectId: "TU_PROJECT_ID_AQUI",
-    storageBucket: "TU_STORAGE_BUCKET_AQUI",
-    messagingSenderId: "TU_SENDER_ID_AQUI",
-    appId: "TU_APP_ID_AQUI"
+    apiKey: "AIzaSyCebbQ6exTiSQVsQk6Ub4hNZTZI0fNpxK8",
+    authDomain: "mediatv4k-30eb0.firebaseapp.com",
+    projectId: "mediatv4k-30eb0",
+    storageBucket: "mediatv4k-30eb0.firebasestorage.app",
+    messagingSenderId: "768500262681",
+    appId: "1:768500262681:web:9795dd138f947503e08788"
 };
 
 const firebaseApp = initializeApp(firebaseConfig);
@@ -63,24 +63,33 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
     botInterval = setInterval(async () => {
         try {
             const now = new Date();
-            // Ajuste estricto a hora Venezuela (UTC-4)
             const horaActualVE = new Date(now.getTime() - (4 * 60 * 60 * 1000));
             const horaStr = String(horaActualVE.getHours()).padStart(2, '0') + ":" + String(horaActualVE.getMinutes()).padStart(2, '0');
             
-            // ⚠️ AQUÍ ESTÁ LA HORA EXACTA DEL DISPARO PARA HOY: 3:45 PM ⚠️
+            // ⚠️ HORA EXACTA DEL DISPARO PARA HOY: 3:45 PM ⚠️
             const horaProgramada = "15:45"; 
 
             if (horaStr === horaProgramada) {
                 addLog(`🚀 [BOT] Iniciando barrido de cobranza a las ${horaStr}...`, "warning");
                 
-                const snapshot = await getDocs(collection(db, 'clientes'));
+                // RUTA: mediatv_data > admin
+                const adminRef = doc(db, 'mediatv_data', 'admin');
+                const adminSnap = await getDoc(adminRef);
+                
+                if (!adminSnap.exists()) {
+                    addLog(`❌ [BOT ERROR] No se encontró la base de datos de clientes`, "error");
+                    return;
+                }
+
+                const dataAdmin = adminSnap.data();
+                const listaClientes = dataAdmin.clientes || [];
+                
                 const hoy = new Date();
                 hoy.setHours(0, 0, 0, 0);
                 let enviadosCount = 0;
 
-                for (const doc of snapshot.docs) {
-                    const client = doc.data();
-                    const fechaExpStr = client["Fecha Expira"] || client.expira || client.FechaExpira;
+                for (const client of listaClientes) {
+                    const fechaExpStr = client["Fecha Expira"] || client.expira || client.FechaExpira || client.VENCIMIENTO;
                     if (!fechaExpStr) continue;
                     
                     const fechaExp = new Date(fechaExpStr + "T00:00:00");
@@ -99,7 +108,7 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                         mensaje = `¡Hola ${client.Nombre || client.nombre || 'Cliente'}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${client.Usuario || client.usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡No te quedes sin tu entretenimiento! Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${client.Usuario || client.usuario}`;
                     }
 
-                    const telRaw = client.Teléfono || client.telefono;
+                    const telRaw = client.Teléfono || client.telefono || client.TELEFONO;
                     if (mensaje && telRaw) {
                         let telefono = String(telRaw).replace(/\D/g, '');
                         if (telefono.length >= 10) {
