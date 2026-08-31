@@ -4,18 +4,18 @@ const qrcode = require('qrcode');
 const pino = require('pino');
 const {
     default: makeWASocket,
-    useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore,
-    Browsers
+    Browsers,
+    initAuthCreds,
+    BufferJSON
 } = require('@whiskeysockets/baileys');
 
 // ==========================================
-// 1. CONFIGURACIÓN DE FIREBASE (LLAVES INTEGRADAS)
+// 1. CONFIGURACIÓN DE FIREBASE
 // ==========================================
 const { initializeApp } = require('firebase/app');
-const { getFirestore, doc, getDoc } = require('firebase/firestore');
+const { getFirestore, doc, getDoc, setDoc, deleteDoc } = require('firebase/firestore');
 
 const firebaseConfig = {
     apiKey: "AIzaSyCebbQ6exTiSQVsQk6Ub4hNZTZI0fNpxK8",
@@ -28,6 +28,69 @@ const firebaseConfig = {
 
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
+
+// ADAPTADOR DE SESIÓN PERSISTENTE EN FIRESTORE (ADIÓS A LOS REINICIOS DE RENDER)
+function useFirestoreAuthState() {
+    const writeData = async (data, id) => {
+        const jsonString = JSON.stringify(data, BufferJSON.replacer);
+        await setDoc(doc(db, 'mediatv_data', `wa_session_${id}`), { data: jsonString });
+    };
+
+    const readData = async (id) => {
+        try {
+            const snap = await getDoc(doc(db, 'mediatv_data', `wa_session_${id}`));
+            if (!snap.exists()) return null;
+            return JSON.parse(snap.data().data, BufferJSON.reviver);
+        } catch (error) {
+            return null;
+        }
+    };
+
+    const removeData = async (id) => {
+        try {
+            await deleteDoc(doc(db, 'mediatv_data', `wa_session_${id}`));
+        } catch (error) {}
+    };
+
+    return {
+        state: {
+            creds: null,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+                    for (const id of ids) {
+                        let value = await readData(`${type}-${id}`);
+                        if (type === 'app-state-sync-key' && value) {
+                            // sync key handling
+                        }
+                        data[id] = value;
+                    }
+                    return data;
+                },
+                set: async (data) => {
+                    const tasks = [];
+                    for (const category of Object.keys(data)) {
+                        for (const id of Object.keys(data[category])) {
+                            const value = data[category][id];
+                            const keyId = `${category}-${id}`;
+                            if (value) {
+                                tasks.push(writeData(value, keyId));
+                            } else {
+                                tasks.push(removeData(keyId));
+                            }
+                        }
+                    }
+                    await Promise.all(tasks);
+                }
+            }
+        },
+        saveCreds: async () => {
+            await writeData(authCreds, 'creds');
+        }
+    };
+}
+
+let authCreds = null;
 
 // ==========================================
 // 2. INICIALIZACIÓN DEL SERVIDOR WEB
@@ -52,7 +115,6 @@ function addLog(msg, type = 'info') {
     if (cloudLogs.length > 50) cloudLogs.pop();
 }
 
-// Búsqueda inteligente e insensible a mayúsculas/acentos para evitar fallos
 function getProp(obj, possibleKeys) {
     for (const k of possibleKeys) {
         if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
@@ -63,14 +125,14 @@ function getProp(obj, possibleKeys) {
 }
 
 // ==========================================
-// 3. CEREBRO: BOT DE COBRANZA CLOUD 24/7 (BARRIDO AUTOMÁTICO CADA HORA EN :00 y :30)
+// 3. CEREBRO: BOT DE COBRANZA CLOUD 24/7
 // ==========================================
 let botInterval = null;
 let ultimoMinutoProcesado = -1;
 
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 con escaneo inteligente de cartera...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 con persistencia en Firestore activo...", "success");
 
     botInterval = setInterval(async () => {
         try {
@@ -130,14 +192,13 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                     let mensaje = "";
                     let tipoEnvio = "";
 
-                    // Regla: 0 a 5 días por vencer, o vencido hace 1 a 5 días
                     if (diffDays >= 0 && diffDays <= 5) {
                         tipoEnvio = "🟡 Por Vencer";
                         mensaje = `¡Hola ${nombre}! 🤝 Te saluda el *Equipo de Soporte de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${usuario}*) vence en ${diffDays === 0 ? 'HOY' : diffDays + ' día(s)'}. ⏳\n\n💳 Puedes procesar tu renovación rápida y segura en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
                     } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
                         const diasVencido = Math.abs(diffDays);
                         tipoEnvio = "🔴 Vencido Reciente";
-                        mensaje = `¡Hola ${nombre}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡No te quedes sin tu entretenimiento! Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
+                        mensaje = `¡Hola ${nombre}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡Notición! Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
                     }
 
                     if (mensaje && telRaw) {
@@ -161,20 +222,37 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
 }
 
 // ==========================================
-// 4. MOTOR DE WHATSAPP (BAILEYS)
+// 4. MOTOR DE WHATSAPP CON FIRESTORE AUTH
 // ==========================================
 addLog("🟢 Servidor Cloud 24/7 iniciado con éxito", "success");
 
 async function startWhatsApp() {
     try {
-        const { state, saveCreds } = await useMultiFileAuthState('auth_session');
+        const { state, saveCreds } = useFirestoreAuthState();
+        
+        const storedCreds = await (async () => {
+            const snap = await getDoc(doc(db, 'mediatv_data', 'wa_session_creds'));
+            if (!snap.exists()) return null;
+            return JSON.parse(snap.data().data, BufferJSON.reviver);
+        })();
+
+        if (storedCreds) {
+            authCreds = storedCreds;
+            state.creds = storedCreds;
+            addLog("📂 Sesión de WhatsApp recuperada desde Firebase Firestore", "success");
+        } else {
+            authCreds = initAuthCreds();
+            state.creds = authCreds;
+            addLog("⚡ Generando credenciales nuevas para WhatsApp...", "warning");
+        }
+
         const { version } = await fetchLatestBaileysVersion();
 
         sock = makeWASocket({
             version,
             auth: {
                 creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+                keys: state.keys
             },
             logger: pino({ level: 'silent' }),
             browser: Browsers.ubuntu('Chrome'),
@@ -202,13 +280,16 @@ async function startWhatsApp() {
             } else if (connection === 'open') {
                 isConnected = true;
                 qrImageBase64 = null;
-                addLog("✅ WhatsApp vinculado y autenticado correctamente", "success");
+                addLog("✅ WhatsApp vinculado y autenticado correctamente en la Nube", "success");
                 
                 iniciarMotorCobranzaCloud(sock);
             }
         });
 
-        sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', async (newCreds) => {
+            authCreds = newCreds;
+            await saveCreds();
+        });
 
     } catch (err) {
         addLog(`❌ Error socket: ${err.message}`, "error");
@@ -240,7 +321,7 @@ app.get('/qr', (req, res) => {
             <html>
             <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#22c55e;font-family:sans-serif;text-align:center;">
                 <div style="font-size:45px;margin-bottom:8px;">✅</div>
-                <div style="font-size:16px;font-weight:800;letter-spacing:0.5px;">WhatsApp Vinculado</div>
+                <div style="font-size:16px;font-weight:800;letter-spacing:0.5px;">WhatsApp Vinculado (Sesión en la Nube)</div>
                 <div style="font-size:12px;color:#94a3b8;margin-top:4px;">Servidor Cloud 24/7 Activo</div>
             </body>
             </html>
@@ -254,7 +335,7 @@ app.get('/qr', (req, res) => {
             <head><meta http-equiv="refresh" content="3"></head>
             <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#38bdf8;font-family:sans-serif;text-align:center;">
                 <div style="font-size:30px;margin-bottom:8px;">⏳</div>
-                <div style="font-size:14px;font-weight:700;">Generando código QR...</div>
+                <div style="font-size:14px;font-weight:700;">Conectando con la sesión guardada en Firestore...</div>
             </body>
             </html>
         `);
@@ -269,44 +350,6 @@ app.get('/qr', (req, res) => {
         </body>
         </html>
     `);
-});
-
-async function sendWhatsAppMessage(phone, message) {
-    if (!isConnected || !sock) throw new Error("WhatsApp no está conectado.");
-    const cleanPhone = String(phone).replace(/\D/g, '');
-    const jid = `${cleanPhone}@s.whatsapp.net`;
-    await sock.sendMessage(jid, { text: message });
-    addLog(`📩 Mensaje entregado a: ${cleanPhone}`, "success");
-    return cleanPhone;
-}
-
-app.post(['/send-message', '/send', '/api/send', '/webhook', '/api/webhook'], async (req, res) => {
-    const data = req.body;
-    try {
-        if (data.phone && data.message) {
-            const target = await sendWhatsAppMessage(data.phone, data.message);
-            return res.json({ success: true, count: 1, targets: [target] });
-        }
-
-        const list = Array.isArray(data) ? data : (data.clients || data.queue || data.numbers || []);
-        if (list.length > 0) {
-            let sentCount = 0;
-            for (const item of list) {
-                const phone = item.phone || item.telefono || item.numero;
-                const msg = item.message || item.mensaje || data.message || "Recordatorio MediaTV 4K";
-                if (phone) {
-                    await sendWhatsAppMessage(phone, msg);
-                    sentCount++;
-                    await new Promise(r => setTimeout(r, 2000));
-                }
-            }
-            return res.json({ success: true, count: sentCount });
-        }
-        res.status(400).json({ error: "No se encontraron números válidos." });
-    } catch (err) {
-        addLog(`❌ Error en envío: ${err.message}`, "error");
-        res.status(500).json({ success: false, error: err.message });
-    }
 });
 
 app.listen(PORT, () => {
