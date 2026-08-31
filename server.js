@@ -41,7 +41,8 @@ async function startWhatsApp() {
             const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
-                qrImageBase64 = await qrcode.toDataURL(qr);
+                // Genera el QR optimizado sin márgenes excesivos
+                qrImageBase64 = await qrcode.toDataURL(qr, { margin: 1, width: 260 });
                 isConnected = false;
             }
 
@@ -53,7 +54,6 @@ async function startWhatsApp() {
                     setTimeout(startWhatsApp, 3000);
                 }
             } else if (connection === 'open') {
-                console.log('✅ ¡WHATSAPP VINCULADO CON ÉXITO!');
                 isConnected = true;
                 qrImageBase64 = null;
             }
@@ -69,7 +69,7 @@ async function startWhatsApp() {
 
 startWhatsApp();
 
-// Estado general para el panel
+// Estado general
 app.get(['/', '/status', '/api/status'], (req, res) => {
     res.json({
         status: isConnected ? "CONNECTED" : (qrImageBase64 ? "QR_READY" : "STARTING"),
@@ -78,61 +78,78 @@ app.get(['/', '/status', '/api/status'], (req, res) => {
     });
 });
 
-// Pantalla QR
+// Pantalla QR 100% Encajada y Limpia para el Iframe
 app.get('/qr', (req, res) => {
     if (isConnected) {
-        return res.send('<h2 style="font-family:sans-serif;text-align:center;color:#22c55e;margin-top:50px;">✅ WhatsApp ya está vinculado y activo</h2>');
+        return res.send(`
+            <!DOCTYPE html>
+            <html>
+            <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#22c55e;font-family:sans-serif;text-align:center;">
+                <div style="font-size:45px;margin-bottom:8px;">✅</div>
+                <div style="font-size:16px;font-weight:800;letter-spacing:0.5px;">WhatsApp Vinculado</div>
+                <div style="font-size:12px;color:#94a3b8;margin-top:4px;">Servidor Cloud 24/7 Activo</div>
+            </body>
+            </html>
+        `);
     }
+
     if (!qrImageBase64) {
-        return res.send('<head><meta http-equiv="refresh" content="3"></head><h2 style="font-family:sans-serif;text-align:center;margin-top:50px;">⏳ Generando código QR...</h2>');
+        return res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head><meta http-equiv="refresh" content="3"></head>
+            <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#38bdf8;font-family:sans-serif;text-align:center;">
+                <div style="font-size:30px;margin-bottom:8px;">⏳</div>
+                <div style="font-size:14px;font-weight:700;">Generando código QR...</div>
+            </body>
+            </html>
+        `);
     }
-    res.send(`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;">
-        <h2>📱 Escanea con tu WhatsApp</h2>
-        <img src="${qrImageBase64}" style="width:300px;height:300px;border:2px solid #000;border-radius:10px;padding:10px;" />
-    </div>`);
+
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head><meta http-equiv="refresh" content="20"></head>
+        <body style="margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#ffffff;overflow:hidden;">
+            <img src="${qrImageBase64}" style="width:250px;height:250px;object-fit:contain;display:block;" />
+        </body>
+        </html>
+    `);
 });
 
-// Función central para despachar un mensaje
+// Envíos de mensajes
 async function sendWhatsAppMessage(phone, message) {
     if (!isConnected || !sock) throw new Error("WhatsApp no está conectado.");
     const cleanPhone = String(phone).replace(/\D/g, '');
     const jid = `${cleanPhone}@s.whatsapp.net`;
     await sock.sendMessage(jid, { text: message });
-    console.log(`📩 [ENVIADO] Mensaje entregado a: ${cleanPhone}`);
     return cleanPhone;
 }
 
-// Receptor Universal: Atrapa envíos individuales o listas masivas
 app.post(['/send-message', '/send', '/api/send', '/webhook', '/api/webhook'], async (req, res) => {
-    console.log("📥 Petición recibida en el backend:", JSON.stringify(req.body));
     const data = req.body;
-
     try {
-        // Caso 1: Envío de cliente individual
         if (data.phone && data.message) {
             const target = await sendWhatsAppMessage(data.phone, data.message);
             return res.json({ success: true, count: 1, targets: [target] });
         }
 
-        // Caso 2: Envío de lista/lote de clientes
         const list = Array.isArray(data) ? data : (data.clients || data.queue || data.numbers || []);
         if (list.length > 0) {
             let sentCount = 0;
             for (const item of list) {
                 const phone = item.phone || item.telefono || item.numero;
-                const msg = item.message || item.mensaje || data.message || "Recordatorio de MediaTV 4K";
+                const msg = item.message || item.mensaje || data.message || "Recordatorio MediaTV 4K";
                 if (phone) {
                     await sendWhatsAppMessage(phone, msg);
                     sentCount++;
-                    await new Promise(r => setTimeout(r, 2000)); // Pausa de 2s antispam
+                    await new Promise(r => setTimeout(r, 2000));
                 }
             }
             return res.json({ success: true, count: sentCount });
         }
-
-        res.status(400).json({ error: "No se encontraron números válidos en la petición." });
+        res.status(400).json({ error: "No se encontraron números válidos." });
     } catch (err) {
-        console.error("❌ Error al procesar envío:", err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 });
