@@ -1,186 +1,74 @@
-const express = require('express');
-const cors = require('cors');
-const qrcode = require('qrcode');
-const pino = require('pino');
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore,
-    Browsers
-} = require('@whiskeysockets/baileys');
+// ==========================================
+// MOTOR DE COBRANZA AUTOMÁTICA DIARIA (BOT 24/7)
+// ==========================================
+function iniciarMotorCobranzaCloud(db, whatsappClient) {
+    // Revisa cada 60 minutos si es la hora programada en los settings
+    setInterval(async () => {
+        try {
+            const statusConfig = process.env.CLOUD_ENVIO_STATUS || "Activo";
+            if (statusConfig === "Pausado") return;
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+            const horaProgramada = process.env.CLOUD_ENVIO_HORA || "09:00"; // Hora configurada
+            const now = new Date();
+            // Ajuste a hora Venezuela (UTC-4)
+            const horaActualVE = new Date(now.getTime() - (4 * 60 * 60 * 1000));
+            const horaStr = String(horaActualVE.getHours()).padStart(2, '0') + ":" + String(horaActualVE.getMinutes()).padStart(2, '0');
 
-const PORT = process.env.PORT || 10000;
-let sock = null;
-let qrImageBase64 = null;
-let isConnected = false;
-let cloudLogs = [];
+            // Compara si coincide con la hora programada (margen de 1 minuto)
+            if (horaStr === horaProgramada) {
+                console.log(`[BOT CLOUD] 🚀 Ejecutando barrido diario de cobranza a las ${horaStr} (VE)...`);
+                
+                // Consultar colección de clientes en Firestore
+                const snapshot = await db.collection('clientes').get();
+                const hoy = new Date();
+                hoy.setHours(0, 0, 0, 0);
 
-function getTimestamp() {
-    return new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
-}
+                let enviadosCount = 0;
 
-function addLog(msg, type = 'info') {
-    const time = getTimestamp();
-    cloudLogs.unshift({ time, msg, type });
-    if (cloudLogs.length > 50) cloudLogs.pop();
-}
+                for (const doc of snapshot.docs) {
+                    const client = doc.data();
+                    if (!client.Fecha Expira && !client.expira) continue;
+                    
+                    const fechaExpStr = client.Fecha Expira || client.expira;
+                    const fechaExp = new Date(fechaExpStr + "T00:00:00");
+                    
+                    // Diferencia en días (Expiración - Hoy)
+                    const diffTime = fechaExp - hoy;
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-addLog("🟢 Motor Cloud MediaTV iniciado", "success");
+                    let mensaje = "";
+                    let tipoEnvio = "";
 
-async function startWhatsApp() {
-    try {
-        const { state, saveCreds } = await useMultiFileAuthState('auth_session');
-        const { version } = await fetchLatestBaileysVersion();
+                    // REGLA 1: Por Vencer (1 a 5 días antes)
+                    if (diffDays >= 0 && diffDays <= 5) {
+                        tipoEnvio = "🟡 Por Vencer";
+                        mensaje = `¡Hola ${client.Nombre || client.nombre}! 🤝 Te saluda el *Equipo de Soporte de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${client.Usuario || client.usuario}*) vence en ${diffDays === 0 ? 'HOY' : diffDays + ' día(s)'}. ⏳\n\n💳 Puedes procesar tu renovación rápida y segura en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${client.Usuario || client.usuario}`;
+                    }
+                    // REGLA 2: Vencidos Recientes (1 a 5 días después)
+                    else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
+                        const diasVencido = Math.abs(diffDays);
+                        tipoEnvio = "🔴 Vencido Reciente";
+                        mensaje = `¡Hola ${client.Nombre || client.nombre}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${client.Usuario || client.usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡No te quedes sin tu entretenimiento! Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${client.Usuario || client.usuario}`;
+                    }
+                    // REGLA 3: ≥ 6 días vencidos -> NO SE HACE NADA (Silencio automático)
 
-        sock = makeWASocket({
-            version,
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
-            },
-            logger: pino({ level: 'silent' }),
-            browser: Browsers.ubuntu('Chrome'),
-            printQRInTerminal: false,
-            markOnlineOnConnect: false
-        });
-
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-
-            if (qr) {
-                qrImageBase64 = await qrcode.toDataURL(qr, { margin: 1, width: 260 });
-                isConnected = false;
-                addLog("⚡ QR listo en espera de escaneo", "warning");
-            }
-
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                isConnected = false;
-                addLog(`⚠️ Conexión en espera (${statusCode || 'Reintentando'})...`, "warning");
-                if (shouldReconnect) setTimeout(startWhatsApp, 3000);
-            } else if (connection === 'open') {
-                isConnected = true;
-                qrImageBase64 = null;
-                addLog("✅ WhatsApp vinculado y autenticado", "success");
-            }
-        });
-
-        sock.ev.on('creds.update', saveCreds);
-
-    } catch (err) {
-        addLog(`❌ Error socket: ${err.message}`, "error");
-        setTimeout(startWhatsApp, 4000);
-    }
-}
-
-startWhatsApp();
-
-app.get(['/', '/status'], (req, res) => {
-    res.json({ status: isConnected ? "CONNECTED" : (qrImageBase64 ? "QR_READY" : "STARTING"), connected: isConnected });
-});
-
-app.get('/logs', (req, res) => {
-    res.json({ success: true, logs: cloudLogs });
-});
-
-app.get('/qr', (req, res) => {
-    if (isConnected) {
-        return res.send(`
-            <!DOCTYPE html>
-            <html>
-            <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#22c55e;font-family:sans-serif;text-align:center;">
-                <div style="font-size:45px;margin-bottom:8px;">✅</div>
-                <div style="font-size:16px;font-weight:800;">WhatsApp Vinculado</div>
-                <div style="font-size:12px;color:#94a3b8;margin-top:4px;">Servidor Cloud 24/7 Activo</div>
-            </body>
-            </html>
-        `);
-    }
-
-    if (!qrImageBase64) {
-        return res.send(`
-            <!DOCTYPE html>
-            <html>
-            <head><meta http-equiv="refresh" content="3"></head>
-            <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#38bdf8;font-family:sans-serif;text-align:center;">
-                <div style="font-size:30px;margin-bottom:8px;">⏳</div>
-                <div style="font-size:14px;font-weight:700;">Generando código QR...</div>
-            </body>
-            </html>
-        `);
-    }
-
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head><meta http-equiv="refresh" content="20"></head>
-        <body style="margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#ffffff;overflow:hidden;">
-            <img src="${qrImageBase64}" style="width:250px;height:250px;object-fit:contain;display:block;" />
-        </body>
-        </html>
-    `);
-});
-
-async function sendWhatsAppMessage(phone, message) {
-    if (!isConnected || !sock) throw new Error("WhatsApp no está conectado.");
-    const cleanPhone = String(phone).replace(/\D/g, '');
-    const jid = `${cleanPhone}@s.whatsapp.net`;
-    await sock.sendMessage(jid, { text: message });
-    addLog(`📩 Mensaje entregado a: ${cleanPhone}`, "success");
-    return cleanPhone;
-}
-
-// Opción 3: Diagnóstico rápido por URL
-app.get('/test', async (req, res) => {
-    const phone = req.query.phone;
-    if (!phone) return res.send('Agrega tu número al enlace: /test?phone=58412XXXXXXX');
-    try {
-        await sendWhatsAppMessage(phone, "🔔 *MediaTV 4K Test:* ¡Conexión con el Servidor Cloud 24/7 establecida con éxito!");
-        res.send(`✅ Mensaje de prueba enviado exitosamente al número ${phone}. Revisa tu WhatsApp.`);
-    } catch (err) {
-        res.send(`❌ Error al enviar prueba: ${err.message}`);
-    }
-});
-
-// Receptor masivo
-app.post(['/send-message', '/send', '/api/send', '/webhook'], async (req, res) => {
-    const data = req.body;
-    try {
-        if (data.phone && data.message) {
-            const target = await sendWhatsAppMessage(data.phone, data.message);
-            return res.json({ success: true, count: 1, targets: [target] });
-        }
-
-        const list = Array.isArray(data) ? data : (data.clients || data.queue || data.numbers || []);
-        if (list.length > 0) {
-            let sentCount = 0;
-            addLog(`🚀 Iniciando lote de cobro para ${list.length} clientes...`, "info");
-            for (const item of list) {
-                const phone = item.phone || item.telefono || item.numero;
-                const msg = item.message || item.mensaje || data.message || "Recordatorio MediaTV 4K";
-                if (phone) {
-                    await sendWhatsAppMessage(phone, msg);
-                    sentCount++;
-                    await new Promise(r => setTimeout(r, 2500));
+                    // Si hay mensaje y el cliente tiene teléfono válido, disparar WhatsApp
+                    if (mensaje && client.Teléfono || client.telefono) {
+                        let telefono = (client.Teléfono || client.telefono).replace(/\D/g, '');
+                        if (telefono.length >= 10) {
+                            const jid = telefono + "@s.whatsapp.net";
+                            await whatsappClient.sendMessage(jid, { text: mensaje });
+                            enviadosCount++;
+                            console.log(`[BOT CLOUD] ✅ Enviado [${tipoEnvio}] a ${client.Nombre} (${telefono})`);
+                            // Pausa de 5 segundos entre mensajes para evitar bloqueo de WhatsApp
+                            await new Promise(r => setTimeout(r, 5000));
+                        }
+                    }
                 }
+                console.log(`[BOT CLOUD] 🎯 Barrido completado. Total de avisos enviados: ${enviadosCount}`);
             }
-            addLog(`🎯 Lote finalizado: ${sentCount} mensajes enviados`, "success");
-            return res.json({ success: true, count: sentCount });
+        } catch (error) {
+            console.error("[BOT CLOUD ERROR] Error en la rutina de cobro automático:", error);
         }
-        res.status(400).json({ error: "No se encontraron números válidos." });
-    } catch (err) {
-        addLog(`❌ Error en envío: ${err.message}`, "error");
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-app.listen(PORT, () => {
-    console.log(`🚀 Servidor listo en puerto ${PORT}`);
-});
+    }, 60000); // Revisa cada minuto
+}
