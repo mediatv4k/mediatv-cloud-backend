@@ -36,7 +36,7 @@ async function limpiarSesionesAntiguas() {
         const deletions = [];
         querySnapshot.forEach((document) => {
             if (document.id.startsWith('wa_session_') && document.id !== 'wa_session_creds') {
-                // Mantenemos credenciais válidas si existen
+                // Mantenemos credenciales válidas
             }
         });
     } catch (e) {}
@@ -136,22 +136,20 @@ function getProp(obj, possibleKeys) {
 }
 
 // ==========================================
-// 3. CEREBRO DE COBRANZA CON HORA CONFIGURABLE DESDE EL PANEL
+// 3. CEREBRO DE COBRANZA CON HORA Y FECHA REAL DE VENEZUELA
 // ==========================================
 let botInterval = null;
 let ultimoMinutoProcesado = -1;
 
 function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
-    if (!horaProg) return currentMinutes === 0 || currentMinutes === 30; // Fallback por seguridad
+    if (!horaProg) return currentMinutes === 0 || currentMinutes === 30; // Fallback
     const clean = String(horaProg).toLowerCase().trim();
     
-    // Si viene en formato 24h (ej: "17:15")
     if (/^\d{1,2}:\d{2}$/.test(clean)) {
         const [h, m] = clean.split(':').map(Number);
         return currentHours24 === h && currentMinutes === m;
     }
     
-    // Si viene en formato 12h con am/pm (ej: "05:15 p. m." o "5:15 pm")
     const match = clean.match(/(\d{1,2}):(\d{2})\s*(a|p)/);
     if (match) {
         let h = parseInt(match[1], 10);
@@ -166,7 +164,7 @@ function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
 
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 autónomo activo...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 autónomo y sincronizado con VE activo...", "success");
 
     botInterval = setInterval(async () => {
         try {
@@ -176,13 +174,13 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
             const minutoActual = horaActualVE.getMinutes();
             const claveMinutoUnica = `${currentHours24}-${minutoActual}`;
             
-            // Consultamos la hora configurada directamente en Firestore
+            // Consultamos la hora configurada en Firestore
             const adminRef = doc(db, 'mediatv_data', 'admin');
             const adminSnap = await getDoc(adminRef);
             
             if (!adminSnap.exists()) return;
             const dataAdmin = adminSnap.data();
-            const horaProgramadaPanel = dataAdmin.horaProgramada; // Hora que guardas en tu web
+            const horaProgramadaPanel = dataAdmin.horaProgramada;
 
             const esHoraDeCobro = matchesScheduledTime(horaProgramadaPanel, currentHours24, minutoActual);
 
@@ -192,8 +190,9 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                 addLog(`🚀 [BOT] Barrido inteligente activado por el panel a las ${horaStrVE} (VE)...`, "warning");
                 
                 const listaClientes = dataAdmin.clientes || [];
-                const hoy = new Date();
-                hoy.setHours(0, 0, 0, 0);
+                
+                // CORRECCIÓN CRÍTICA: 'hoy' fijado exactamente en el calendario de Venezuela
+                const hoy = new Date(horaActualVE.getFullYear(), horaActualVE.getMonth(), horaActualVE.getDate());
                 let enviadosCount = 0;
 
                 for (const client of listaClientes) {
@@ -313,7 +312,7 @@ async function startWhatsApp() {
 startWhatsApp();
 
 // ==========================================
-// 5. ENDPOINTS Y RUTAS EXPRESS (CON APOYO PARA SETTINGS)
+// 5. ENDPOINTS Y RUTAS EXPRESS
 // ==========================================
 app.post(['/settings', '/api/settings'], async (req, res) => {
     try {
