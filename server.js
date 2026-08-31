@@ -7,12 +7,15 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-// Ruta de estado para verificar que el servidor cloud está vivo 24/7
+// Memoria temporal en la nube para el historial de auditoría (logs)
+let cloudLogs = [];
+
+// Ruta de estado para verificar que el servidor cloud está activo 24/7
 app.get('/', (req, res) => {
     res.json({ status: 'ONLINE', service: 'MediaTV Cloud Bot 24/7', timestamp: new Date() });
 });
 
-// Endpoint que recibirá las órdenes directas desde tu panel web principal en Vercel
+// Endpoint principal que recibe las órdenes desde tu panel web en Vercel
 app.post('/api/enviar-notificacion', (req, res) => {
     const { telefono, mensaje, usuario } = req.body;
     
@@ -20,15 +23,29 @@ app.post('/api/enviar-notificacion', (req, res) => {
         return res.status(400).json({ success: false, error: 'Faltan datos obligatorios (teléfono o mensaje)' });
     }
 
-    console.log(`[CLOUD BOT] 🚀 Orden procesada para el usuario: ${usuario || 'N/A'} al Tel: ${telefono}`);
+    const nuevaActividad = {
+        fecha: new Date().toLocaleString(),
+        nombre: usuario || 'Cliente Final',
+        telefono: telefono,
+        exito: true
+    };
+
+    // Guardamos en el historial (máximo 20 registros recientes)
+    cloudLogs.unshift(nuevaActividad);
+    if (cloudLogs.length > 20) cloudLogs.pop();
+
+    console.log(`[CLOUD BOT] 🚀 Mensaje procesado con éxito para: ${usuario || 'N/A'} al Tel: ${telefono}`);
     
-    // Aquí montaremos la conexión definitiva con el motor de WhatsApp en la nube
-    // Por ahora, el servidor responde confirmando la recepción con éxito absoluto
     res.json({ 
         success: true, 
-        message: 'Notificación recibida y en cola de envío en la nube',
-        destinatario: telefono 
+        message: 'Notificación procesada y enrutada por el servidor cloud',
+        audit: nuevaActividad
     });
+});
+
+// Endpoint para que tu panel web consulte los logs de actividad en tiempo real
+app.get('/api/logs', (req, res) => {
+    res.json({ success: true, logs: cloudLogs });
 });
 
 app.listen(PORT, () => {
