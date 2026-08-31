@@ -31,7 +31,7 @@ function addLog(msg, type = 'info') {
     if (cloudLogs.length > 50) cloudLogs.pop();
 }
 
-addLog("🟢 Servidor Cloud 24/7 iniciado con éxito", "success");
+addLog("🟢 Motor Cloud MediaTV iniciado", "success");
 
 async function startWhatsApp() {
     try {
@@ -56,7 +56,7 @@ async function startWhatsApp() {
             if (qr) {
                 qrImageBase64 = await qrcode.toDataURL(qr, { margin: 1, width: 260 });
                 isConnected = false;
-                addLog("⚡ Código QR generado en espera de escaneo", "warning");
+                addLog("⚡ QR listo en espera de escaneo", "warning");
             }
 
             if (connection === 'close') {
@@ -64,13 +64,11 @@ async function startWhatsApp() {
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 isConnected = false;
                 addLog(`⚠️ Conexión en espera (${statusCode || 'Reintentando'})...`, "warning");
-                if (shouldReconnect) {
-                    setTimeout(startWhatsApp, 3000);
-                }
+                if (shouldReconnect) setTimeout(startWhatsApp, 3000);
             } else if (connection === 'open') {
                 isConnected = true;
                 qrImageBase64 = null;
-                addLog("✅ WhatsApp vinculado y autenticado correctamente", "success");
+                addLog("✅ WhatsApp vinculado y autenticado", "success");
             }
         });
 
@@ -84,21 +82,14 @@ async function startWhatsApp() {
 
 startWhatsApp();
 
-// Estado general
-app.get(['/', '/status', '/api/status'], (req, res) => {
-    res.json({
-        status: isConnected ? "CONNECTED" : (qrImageBase64 ? "QR_READY" : "STARTING"),
-        service: "MediaTV Cloud Bot 24/7",
-        connected: isConnected
-    });
+app.get(['/', '/status'], (req, res) => {
+    res.json({ status: isConnected ? "CONNECTED" : (qrImageBase64 ? "QR_READY" : "STARTING"), connected: isConnected });
 });
 
-// Endpoint de la Bitácora
-app.get(['/logs', '/api/logs'], (req, res) => {
+app.get('/logs', (req, res) => {
     res.json({ success: true, logs: cloudLogs });
 });
 
-// Pantalla QR dentro del Iframe
 app.get('/qr', (req, res) => {
     if (isConnected) {
         return res.send(`
@@ -106,7 +97,7 @@ app.get('/qr', (req, res) => {
             <html>
             <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#22c55e;font-family:sans-serif;text-align:center;">
                 <div style="font-size:45px;margin-bottom:8px;">✅</div>
-                <div style="font-size:16px;font-weight:800;letter-spacing:0.5px;">WhatsApp Vinculado</div>
+                <div style="font-size:16px;font-weight:800;">WhatsApp Vinculado</div>
                 <div style="font-size:12px;color:#94a3b8;margin-top:4px;">Servidor Cloud 24/7 Activo</div>
             </body>
             </html>
@@ -137,7 +128,6 @@ app.get('/qr', (req, res) => {
     `);
 });
 
-// Envíos de mensajes
 async function sendWhatsAppMessage(phone, message) {
     if (!isConnected || !sock) throw new Error("WhatsApp no está conectado.");
     const cleanPhone = String(phone).replace(/\D/g, '');
@@ -147,7 +137,20 @@ async function sendWhatsAppMessage(phone, message) {
     return cleanPhone;
 }
 
-app.post(['/send-message', '/send', '/api/send', '/webhook', '/api/webhook'], async (req, res) => {
+// Opción 3: Diagnóstico rápido por URL
+app.get('/test', async (req, res) => {
+    const phone = req.query.phone;
+    if (!phone) return res.send('Agrega tu número al enlace: /test?phone=58412XXXXXXX');
+    try {
+        await sendWhatsAppMessage(phone, "🔔 *MediaTV 4K Test:* ¡Conexión con el Servidor Cloud 24/7 establecida con éxito!");
+        res.send(`✅ Mensaje de prueba enviado exitosamente al número ${phone}. Revisa tu WhatsApp.`);
+    } catch (err) {
+        res.send(`❌ Error al enviar prueba: ${err.message}`);
+    }
+});
+
+// Receptor masivo
+app.post(['/send-message', '/send', '/api/send', '/webhook'], async (req, res) => {
     const data = req.body;
     try {
         if (data.phone && data.message) {
@@ -158,15 +161,17 @@ app.post(['/send-message', '/send', '/api/send', '/webhook', '/api/webhook'], as
         const list = Array.isArray(data) ? data : (data.clients || data.queue || data.numbers || []);
         if (list.length > 0) {
             let sentCount = 0;
+            addLog(`🚀 Iniciando lote de cobro para ${list.length} clientes...`, "info");
             for (const item of list) {
                 const phone = item.phone || item.telefono || item.numero;
                 const msg = item.message || item.mensaje || data.message || "Recordatorio MediaTV 4K";
                 if (phone) {
                     await sendWhatsAppMessage(phone, msg);
                     sentCount++;
-                    await new Promise(r => setTimeout(r, 2000));
+                    await new Promise(r => setTimeout(r, 2500));
                 }
             }
+            addLog(`🎯 Lote finalizado: ${sentCount} mensajes enviados`, "success");
             return res.json({ success: true, count: sentCount });
         }
         res.status(400).json({ error: "No se encontraron números válidos." });
