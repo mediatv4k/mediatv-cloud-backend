@@ -175,7 +175,6 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
             if (!adminSnap.exists()) return;
             const dataAdmin = adminSnap.data();
             
-            // LECTURA INTELIGENTE: Soporta tanto horaProgramada como botConfig.hour
             const horaProgramadaPanel = dataAdmin.horaProgramada || (dataAdmin.botConfig && dataAdmin.botConfig.hour);
 
             const esHoraDeCobro = matchesScheduledTime(horaProgramadaPanel, currentHours24, minutoActual);
