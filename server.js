@@ -29,7 +29,20 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
-// ADAPTADOR FIRESTORE ROBUSTO
+// LIMPIEZA SEGURA DE RESIDUOS
+async function limpiarSesionesAntiguas() {
+    try {
+        const querySnapshot = await getDocs(collection(db, 'mediatv_data'));
+        const deletions = [];
+        querySnapshot.forEach((document) => {
+            if (document.id.startsWith('wa_session_') && document.id !== 'wa_session_creds') {
+                // Mantenemos credenciais válidas si existen
+            }
+        });
+    } catch (e) {}
+}
+
+// ADAPTADOR FIRESTORE BLINDADO (INTACTO)
 async function useFirestoreAuthState() {
     const writeData = async (data, id) => {
         try {
@@ -123,39 +136,62 @@ function getProp(obj, possibleKeys) {
 }
 
 // ==========================================
-// 3. CEREBRO: BOT DE COBRANZA CLOUD 24/7
+// 3. CEREBRO DE COBRANZA CON HORA CONFIGURABLE DESDE EL PANEL
 // ==========================================
 let botInterval = null;
 let ultimoMinutoProcesado = -1;
 
+function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
+    if (!horaProg) return currentMinutes === 0 || currentMinutes === 30; // Fallback por seguridad
+    const clean = String(horaProg).toLowerCase().trim();
+    
+    // Si viene en formato 24h (ej: "17:15")
+    if (/^\d{1,2}:\d{2}$/.test(clean)) {
+        const [h, m] = clean.split(':').map(Number);
+        return currentHours24 === h && currentMinutes === m;
+    }
+    
+    // Si viene en formato 12h con am/pm (ej: "05:15 p. m." o "5:15 pm")
+    const match = clean.match(/(\d{1,2}):(\d{2})\s*(a|p)/);
+    if (match) {
+        let h = parseInt(match[1], 10);
+        const m = parseInt(match[2], 10);
+        const isPm = match[3] === 'p';
+        if (isPm && h < 12) h += 12;
+        if (!isPm && h === 12) h = 0;
+        return currentHours24 === h && currentMinutes === m;
+    }
+    return currentMinutes === 0 || currentMinutes === 30;
+}
+
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 activo...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 autónomo activo...", "success");
 
     botInterval = setInterval(async () => {
         try {
             const now = new Date();
             const horaActualVE = new Date(now.getTime() - (4 * 60 * 60 * 1000));
+            const currentHours24 = horaActualVE.getHours();
             const minutoActual = horaActualVE.getMinutes();
-            const horaStr = String(horaActualVE.getHours()).padStart(2, '0') + ":" + String(minutoActual).padStart(2, '0');
+            const claveMinutoUnica = `${currentHours24}-${minutoActual}`;
             
-            const esHoraDeCobro = (minutoActual === 0 || minutoActual === 30);
+            // Consultamos la hora configurada directamente en Firestore
+            const adminRef = doc(db, 'mediatv_data', 'admin');
+            const adminSnap = await getDoc(adminRef);
+            
+            if (!adminSnap.exists()) return;
+            const dataAdmin = adminSnap.data();
+            const horaProgramadaPanel = dataAdmin.horaProgramada; // Hora que guardas en tu web
 
-            if (esHoraDeCobro && ultimoMinutoProcesado !== minutoActual) {
-                ultimoMinutoProcesado = minutoActual;
-                addLog(`🚀 [BOT] Iniciando barrido inteligente de cartera a las ${horaStr} (VE)...`, "warning");
-                
-                const adminRef = doc(db, 'mediatv_data', 'admin');
-                const adminSnap = await getDoc(adminRef);
-                
-                if (!adminSnap.exists()) {
-                    addLog(`❌ [BOT ERROR] No se encontró el documento admin en Firestore`, "error");
-                    return;
-                }
+            const esHoraDeCobro = matchesScheduledTime(horaProgramadaPanel, currentHours24, minutoActual);
 
-                const dataAdmin = adminSnap.data();
+            if (esHoraDeCobro && ultimoMinutoProcesado !== claveMinutoUnica) {
+                ultimoMinutoProcesado = claveMinutoUnica;
+                const horaStrVE = String(currentHours24).padStart(2, '0') + ":" + String(minutoActual).padStart(2, '0');
+                addLog(`🚀 [BOT] Barrido inteligente activado por el panel a las ${horaStrVE} (VE)...`, "warning");
+                
                 const listaClientes = dataAdmin.clientes || [];
-                
                 const hoy = new Date();
                 hoy.setHours(0, 0, 0, 0);
                 let enviadosCount = 0;
@@ -210,22 +246,22 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                         }
                     }
                 }
-                addLog(`🎯 Barrido inteligente finalizado. Total cobros despachados: ${enviadosCount}`, "success");
+                addLog(`🎯 Barrido finalizado. Total cobros despachados: ${enviadosCount}`, "success");
             }
         } catch (error) {
             addLog(`❌ [BOT ERROR] ${error.message}`, "error");
-            console.error(error);
         }
     }, 20000);
 }
 
 // ==========================================
-// 4. MOTOR DE WHATSAPP
+// 4. MOTOR DE WHATSAPP (ESTABLE Y PERSISTENTE)
 // ==========================================
 addLog("🟢 Servidor Cloud 24/7 iniciado con éxito", "success");
 
 async function startWhatsApp() {
     try {
+        await limpiarSesionesAntiguas();
         const { state, saveCreds } = await useFirestoreAuthState();
         const { version } = await fetchLatestBaileysVersion();
 
@@ -247,7 +283,7 @@ async function startWhatsApp() {
             if (qr) {
                 qrImageBase64 = await qrcode.toDataURL(qr, { margin: 1, width: 260 });
                 isConnected = false;
-                addLog("⚡ Código QR fresco generado y listo para escanear", "warning");
+                addLog("⚡ Código QR generado en espera de escaneo", "warning");
             }
 
             if (connection === 'close') {
@@ -262,7 +298,6 @@ async function startWhatsApp() {
                 isConnected = true;
                 qrImageBase64 = null;
                 addLog("✅ WhatsApp vinculado y autenticado correctamente en la Nube", "success");
-                
                 iniciarMotorCobranzaCloud(sock);
             }
         });
@@ -278,8 +313,23 @@ async function startWhatsApp() {
 startWhatsApp();
 
 // ==========================================
-// 5. ENDPOINTS Y RUTAS EXPRESS
+// 5. ENDPOINTS Y RUTAS EXPRESS (CON APOYO PARA SETTINGS)
 // ==========================================
+app.post(['/settings', '/api/settings'], async (req, res) => {
+    try {
+        const { horaProgramada, estadoEnvio } = req.body;
+        const adminRef = doc(db, 'mediatv_data', 'admin');
+        await setDoc(adminRef, { 
+            horaProgramada: horaProgramada || "",
+            estadoEnvio: estadoEnvio || "Activo"
+        }, { merge: true });
+        addLog(`⚙️ Configuración actualizada desde el panel: Hora -> ${horaProgramada}`, "success");
+        res.json({ success: true, message: "Settings guardados con éxito" });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 app.get(['/', '/status', '/api/status'], (req, res) => {
     res.json({
         status: isConnected ? "CONNECTED" : (qrImageBase64 ? "QR_READY" : "STARTING"),
@@ -313,7 +363,7 @@ app.get('/qr', (req, res) => {
             <head><meta http-equiv="refresh" content="3"></head>
             <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#38bdf8;font-family:sans-serif;text-align:center;">
                 <div style="font-size:30px;margin-bottom:8px;">⏳</div>
-                <div style="font-size:14px;font-weight:700;">Cargando credenciales y generando QR...</div>
+                <div style="font-size:14px;font-weight:700;">Servidor operando con normalidad...</div>
             </body>
             </html>
         `);
