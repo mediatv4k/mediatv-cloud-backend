@@ -7,47 +7,83 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-// Memoria temporal en la nube para el historial de auditoría (logs)
+// Memoria para logs y cola de mensajes
 let cloudLogs = [];
+let messageQueue = [];
+let isProcessingQueue = false;
 
-// Ruta de estado para verificar que el servidor cloud está activo 24/7
+// Simulación de envío con intervalo seguro (1 minuto / 60 segundos)
+async function processMessageQueue() {
+    if (isProcessingQueue || messageQueue.length === 0) return;
+    
+    isProcessingQueue = true;
+    const currentTask = messageQueue.shift();
+
+    try {
+        console.log(`[QUEUE] 📤 Enviando mensaje a ${currentTask.telefono}... (Pausando 60s por seguridad)`);
+        
+        // --- AQUÍ SE CONECTARÁ TU WHATSAPP (Librería Baileys o WWebJS) ---
+        // Simulamos el envío exitoso por ahora:
+        await new Promise(resolve => setTimeout(resolve, 1500)); 
+
+        const exitoLog = {
+            fecha: new Date().toLocaleString(),
+            nombre: currentTask.usuario || 'Cliente MediaTV',
+            telefono: currentTask.telefono,
+            exito: true,
+            detalle: 'Enviado con éxito (Fila Cloud)'
+        };
+
+        cloudLogs.unshift(exitoLog);
+        if (cloudLogs.length > 30) cloudLogs.pop();
+
+    } catch (error) {
+        console.error(`[QUEUE ERROR] ❌ Falló el envío a ${currentTask.telefono}:`, error);
+        cloudLogs.unshift({
+            fecha: new Date().toLocaleString(),
+            nombre: currentTask.usuario || 'Error',
+            telefono: currentTask.telefono,
+            exito: false,
+            detalle: 'Error en pasarela de WhatsApp'
+        });
+    } finally {
+        // Pausa estricta de 60 segundos antes de procesar el siguiente mensaje
+        setTimeout(() => {
+            isProcessingQueue = false;
+            processMessageQueue();
+        }, 60000); 
+    }
+}
+
 app.get('/', (req, res) => {
-    res.json({ status: 'ONLINE', service: 'MediaTV Cloud Bot 24/7', timestamp: new Date() });
+    res.json({ status: 'ONLINE', service: 'MediaTV Cloud Bot 24/7', queueLength: messageQueue.length });
 });
 
-// Endpoint principal que recibe las órdenes desde tu panel web en Vercel
+// Endpoint que recibe la orden de cobro/notificación y la mete a la cola
 app.post('/api/enviar-notificacion', (req, res) => {
     const { telefono, mensaje, usuario } = req.body;
     
     if (!telefono || !mensaje) {
-        return res.status(400).json({ success: false, error: 'Faltan datos obligatorios (teléfono o mensaje)' });
+        return res.status(400).json({ success: false, error: 'Faltan datos obligatorios' });
     }
 
-    const nuevaActividad = {
-        fecha: new Date().toLocaleString(),
-        nombre: usuario || 'Cliente Final',
-        telefono: telefono,
-        exito: true
-    };
-
-    // Guardamos en el historial (máximo 20 registros recientes)
-    cloudLogs.unshift(nuevaActividad);
-    if (cloudLogs.length > 20) cloudLogs.pop();
-
-    console.log(`[CLOUD BOT] 🚀 Mensaje procesado con éxito para: ${usuario || 'N/A'} al Tel: ${telefono}`);
+    // Agregamos a la cola de envío
+    messageQueue.push({ telefono, mensaje, usuario });
     
+    // Disparamos el procesador si está inactivo
+    processMessageQueue();
+
     res.json({ 
         success: true, 
-        message: 'Notificación procesada y enrutada por el servidor cloud',
-        audit: nuevaActividad
+        message: 'Mensaje agregado a la cola de la nube. Se enviará respetando el intervalo de seguridad.',
+        queuePosition: messageQueue.length
     });
 });
 
-// Endpoint para que tu panel web consulte los logs de actividad en tiempo real
 app.get('/api/logs', (req, res) => {
-    res.json({ success: true, logs: cloudLogs });
+    res.json({ success: true, logs: cloudLogs, queueActive: messageQueue.length });
 });
 
 app.listen(PORT, () => {
-    console.log(`✅ Servidor Cloud de MediaTV 4K corriendo exitosamente en el puerto ${PORT}`);
+    console.log(`✅ Servidor Cloud de MediaTV 4K corriendo en el puerto ${PORT}`);
 });
