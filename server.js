@@ -29,24 +29,7 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
-// FUNCIÓN PARA LIMPIAR BASURA DE SESIONES ANTERIORES EN FIRESTORE
-async function limpiarSesionesAntiguas() {
-    try {
-        const querySnapshot = await getDocs(collection(db, 'mediatv_data'));
-        const deletions = [];
-        querySnapshot.forEach((document) => {
-            if (document.id.startsWith('wa_session_')) {
-                deletions.push(deleteDoc(doc(db, 'mediatv_data', document.id)));
-            }
-        });
-        await Promise.all(deletions);
-        console.log("🧹 Sesiones antiguas de WhatsApp limpiadas de Firestore.");
-    } catch (e) {
-        console.log("Error limpiando sesiones:", e);
-    }
-}
-
-// ADAPTADOR FIRESTORE LIMPIO
+// ADAPTADOR FIRESTORE ROBUSTO
 async function useFirestoreAuthState() {
     const writeData = async (data, id) => {
         try {
@@ -71,7 +54,10 @@ async function useFirestoreAuthState() {
         } catch (error) {}
     };
 
-    const creds = initAuthCreds();
+    let creds = await readData('creds');
+    if (!creds) {
+        creds = initAuthCreds();
+    }
 
     const state = {
         creds,
@@ -144,7 +130,7 @@ let ultimoMinutoProcesado = -1;
 
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 activo con base limpia...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 activo...", "success");
 
     botInterval = setInterval(async () => {
         try {
@@ -210,7 +196,7 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                     } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
                         const diasVencido = Math.abs(diffDays);
                         tipoEnvio = "🔴 Vencido Reciente";
-                        mensaje = `¡Hola ${nombre}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${usuario}*) venció hace ${diasVencido} day(s). 🔴\n\n✨ ¡Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
+                        mensaje = `¡Hola ${nombre}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
                     }
 
                     if (mensaje && telRaw) {
@@ -234,15 +220,12 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
 }
 
 // ==========================================
-// 4. MOTOR DE WHATSAPP CON LIMPIEZA AUTOMÁTICA
+// 4. MOTOR DE WHATSAPP
 // ==========================================
 addLog("🟢 Servidor Cloud 24/7 iniciado con éxito", "success");
 
 async function startWhatsApp() {
     try {
-        // Limpiamos cualquier residuo viejo en Firestore antes de arrancar el socket
-        await limpiarSesionesAntiguas();
-
         const { state, saveCreds } = await useFirestoreAuthState();
         const { version } = await fetchLatestBaileysVersion();
 
@@ -330,7 +313,7 @@ app.get('/qr', (req, res) => {
             <head><meta http-equiv="refresh" content="3"></head>
             <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#38bdf8;font-family:sans-serif;text-align:center;">
                 <div style="font-size:30px;margin-bottom:8px;">⏳</div>
-                <div style="font-size:14px;font-weight:700;">Limpiando base de datos y generando QR...</div>
+                <div style="font-size:14px;font-weight:700;">Cargando credenciales y generando QR...</div>
             </body>
             </html>
         `);
