@@ -11,6 +11,27 @@ const {
     Browsers
 } = require('@whiskeysockets/baileys');
 
+// ==========================================
+// 1. CONFIGURACIÓN DE FIREBASE (¡PON TUS LLAVES AQUÍ!)
+// ==========================================
+const { initializeApp } = require('firebase/app');
+const { getFirestore, collection, getDocs } = require('firebase/firestore');
+
+const firebaseConfig = {
+    apiKey: "TU_API_KEY_AQUI",
+    authDomain: "TU_AUTH_DOMAIN_AQUI",
+    projectId: "TU_PROJECT_ID_AQUI",
+    storageBucket: "TU_STORAGE_BUCKET_AQUI",
+    messagingSenderId: "TU_SENDER_ID_AQUI",
+    appId: "TU_APP_ID_AQUI"
+};
+
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
+
+// ==========================================
+// 2. INICIALIZACIÓN DEL SERVIDOR WEB
+// ==========================================
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -32,12 +53,12 @@ function addLog(msg, type = 'info') {
 }
 
 // ==========================================
-// CEREBRO: BOT DE COBRANZA CLOUD 24/7
+// 3. CEREBRO: BOT DE COBRANZA CLOUD 24/7 (DISPARO A LAS 3:45 PM)
 // ==========================================
 let botInterval = null;
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 a la escucha...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 a la escucha con Firebase...", "success");
 
     botInterval = setInterval(async () => {
         try {
@@ -46,22 +67,61 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
             const horaActualVE = new Date(now.getTime() - (4 * 60 * 60 * 1000));
             const horaStr = String(horaActualVE.getHours()).padStart(2, '0') + ":" + String(horaActualVE.getMinutes()).padStart(2, '0');
             
-            const horaProgramada = "14:42"; // Configura tu hora de prueba aquí
+            // ⚠️ AQUÍ ESTÁ LA HORA EXACTA DEL DISPARO PARA HOY: 3:45 PM ⚠️
+            const horaProgramada = "15:45"; 
 
             if (horaStr === horaProgramada) {
-                addLog(`🚀 [BOT] Iniciando barrido de los 5 días a las ${horaStr}...`, "warning");
+                addLog(`🚀 [BOT] Iniciando barrido de cobranza a las ${horaStr}...`, "warning");
                 
-                // NOTA TÉCNICA: Aquí irá el bucle de db.collection('clientes').get()
-                addLog(`⚠️ [AVISO] Pendiente: Instalar Firebase Admin en el servidor para que el bot lea la cartera.`, "error");
+                const snapshot = await getDocs(collection(db, 'clientes'));
+                const hoy = new Date();
+                hoy.setHours(0, 0, 0, 0);
+                let enviadosCount = 0;
+
+                for (const doc of snapshot.docs) {
+                    const client = doc.data();
+                    const fechaExpStr = client["Fecha Expira"] || client.expira || client.FechaExpira;
+                    if (!fechaExpStr) continue;
+                    
+                    const fechaExp = new Date(fechaExpStr + "T00:00:00");
+                    const diffTime = fechaExp - hoy;
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+                    let mensaje = "";
+                    let tipoEnvio = "";
+
+                    if (diffDays >= 0 && diffDays <= 5) {
+                        tipoEnvio = "🟡 Por Vencer";
+                        mensaje = `¡Hola ${client.Nombre || client.nombre || 'Cliente'}! 🤝 Te saluda el *Equipo de Soporte de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${client.Usuario || client.usuario}*) vence en ${diffDays === 0 ? 'HOY' : diffDays + ' día(s)'}. ⏳\n\n💳 Puedes procesar tu renovación rápida y segura en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${client.Usuario || client.usuario}`;
+                    } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
+                        const diasVencido = Math.abs(diffDays);
+                        tipoEnvio = "🔴 Vencido Reciente";
+                        mensaje = `¡Hola ${client.Nombre || client.nombre || 'Cliente'}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${client.Usuario || client.usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡No te quedes sin tu entretenimiento! Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${client.Usuario || client.usuario}`;
+                    }
+
+                    const telRaw = client.Teléfono || client.telefono;
+                    if (mensaje && telRaw) {
+                        let telefono = String(telRaw).replace(/\D/g, '');
+                        if (telefono.length >= 10) {
+                            const jid = telefono + "@s.whatsapp.net";
+                            await whatsappClient.sendMessage(jid, { text: mensaje });
+                            enviadosCount++;
+                            addLog(`✅ Cobro [${tipoEnvio}] enviado a ${client.Nombre || 'Cliente'}`, "success");
+                            await new Promise(r => setTimeout(r, 4000));
+                        }
+                    }
+                }
+                addLog(`🎯 Barrido finalizado. Total cobros: ${enviadosCount}`, "success");
             }
         } catch (error) {
             addLog(`❌ [BOT ERROR] ${error.message}`, "error");
+            console.error(error);
         }
-    }, 30000); // Revisa cada 30 segundos
+    }, 30000);
 }
 
 // ==========================================
-// MOTOR DE WHATSAPP (BAILEYS)
+// 4. MOTOR DE WHATSAPP (BAILEYS)
 // ==========================================
 addLog("🟢 Servidor Cloud 24/7 iniciado con éxito", "success");
 
@@ -104,7 +164,7 @@ async function startWhatsApp() {
                 qrImageBase64 = null;
                 addLog("✅ WhatsApp vinculado y autenticado correctamente", "success");
                 
-                // ¡AQUÍ SE ENCIENDE EL BOT APENAS CONECTA WHATSAPP!
+                // ENCENDIDO DEL BOT
                 iniciarMotorCobranzaCloud(sock);
             }
         });
@@ -120,7 +180,7 @@ async function startWhatsApp() {
 startWhatsApp();
 
 // ==========================================
-// ENDPOINTS Y RUTAS EXPRESS
+// 5. ENDPOINTS Y RUTAS EXPRESS
 // ==========================================
 app.get(['/', '/status', '/api/status'], (req, res) => {
     res.json({
