@@ -11,9 +11,6 @@ const {
     BufferJSON
 } = require('@whiskeysockets/baileys');
 
-// ==========================================
-// 1. CONFIGURACIÓN DE FIREBASE
-// ==========================================
 const { initializeApp } = require('firebase/app');
 const { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs } = require('firebase/firestore');
 
@@ -98,9 +95,6 @@ async function useFirestoreAuthState() {
     };
 }
 
-// ==========================================
-// 2. INICIALIZACIÓN DEL SERVIDOR WEB
-// ==========================================
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -130,14 +124,11 @@ function getProp(obj, possibleKeys) {
     return null;
 }
 
-// ==========================================
-// 3. CEREBRO DE COBRANZA BLINDADO CON EL "USUARIO" COMO ID ÚNICO
-// ==========================================
 let botInterval = null;
 let ultimoMinutoProcesado = -1;
 
 function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
-    if (!horaProg) return currentMinutes === 0 || currentMinutes === 30;
+    if (!horaProg) return currentMinutes === 0;
     const clean = String(horaProg).toLowerCase().trim();
     
     if (/^\d{1,2}:\d{2}$/.test(clean)) {
@@ -154,12 +145,12 @@ function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
         if (!isPm && h === 12) h = 0;
         return currentHours24 === h && currentMinutes === m;
     }
-    return currentMinutes === 0 || currentMinutes === 30;
+    return currentMinutes === 0;
 }
 
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 sincronizado con el ID de Usuario activo...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 sincronizado...", "success");
 
     botInterval = setInterval(async () => {
         try {
@@ -174,25 +165,25 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
             
             if (!adminSnap.exists()) return;
             const dataAdmin = adminSnap.data();
-            const horaProgramadaPanel = dataAdmin.horaProgramada;
+            const horaProgramadaPanel = dataAdmin.horaProgramada || (dataAdmin.botConfig && dataAdmin.botConfig.hour);
 
             const esHoraDeCobro = matchesScheduledTime(horaProgramadaPanel, currentHours24, minutoActual);
 
             if (esHoraDeCobro && ultimoMinutoProcesado !== claveMinutoUnica) {
                 ultimoMinutoProcesado = claveMinutoUnica;
                 const horaStrVE = String(currentHours24).padStart(2, '0') + ":" + String(minutoActual).padStart(2, '0');
-                addLog(`🚀 [BOT] Barrido inteligente activado a las ${horaStrVE} (VE)...`, "warning");
+                addLog(`🚀 [BOT] Barrido activado a las ${horaStrVE} (VE)...`, "warning");
                 
                 const listaClientes = dataAdmin.clientes || [];
                 const hoy = new Date(horaActualVE.getFullYear(), horaActualVE.getMonth(), horaActualVE.getDate());
                 let enviadosCount = 0;
 
                 for (const client of listaClientes) {
-                    const usuario = getProp(client, ['Usuario', 'usuario']);
+                    const usuario = getProp(client, ['Usuario', 'usuario', 'USUARIO']);
                     if (!usuario) continue;
 
-                    const nombre = getProp(client, ['Nombre Completo', 'nombreCompleto', 'Nombre', 'nombre']) || 'Cliente';
-                    const fechaExpStr = getProp(client, ['Fecha Expira', 'fechaExpira', 'Expira', 'expira', 'VENCIMIENTO']);
+                    const nombre = getProp(client, ['Nombre Completo', 'nombreCompleto', 'Nombre', 'nombre', 'NOMBRE']) || 'Cliente';
+                    const fechaExpStr = getProp(client, ['Fecha Expira', 'fechaExpira', 'Expira', 'expira', 'VENCIMIENTO', 'FECHA_EXPIRA']);
                     const telRaw = getProp(client, ['Teléfono', 'telefono', 'Telefono', 'TELEFONO']);
 
                     if (!fechaExpStr) continue;
@@ -239,7 +230,7 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                         }
                     }
                 }
-                addLog(`🎯 Barrido finalizado. Total cobros despachados: ${enviadosCount}`, "success");
+                addLog(`🎯 Barrido finalizado. Total: ${enviadosCount}`, "success");
             }
         } catch (error) {
             addLog(`❌ [BOT ERROR] ${error.message}`, "error");
@@ -247,10 +238,7 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
     }, 20000);
 }
 
-// ==========================================
-// 4. MOTOR DE WHATSAPP
-// ==========================================
-addLog("🟢 Servidor Cloud 24/7 iniciado con éxito", "success");
+addLog("🟢 Servidor Cloud iniciado", "success");
 
 async function startWhatsApp() {
     try {
@@ -276,21 +264,21 @@ async function startWhatsApp() {
             if (qr) {
                 qrImageBase64 = await qrcode.toDataURL(qr, { margin: 1, width: 260 });
                 isConnected = false;
-                addLog("⚡ Código QR generado en espera de escaneo", "warning");
+                addLog("⚡ QR Generado", "warning");
             }
 
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 isConnected = false;
-                addLog(`⚠️ Conexión en espera (${statusCode || 'Reintentando'})...`, "warning");
+                addLog(`⚠️ Conexión en espera...`, "warning");
                 if (shouldReconnect) {
                     setTimeout(startWhatsApp, 3000);
                 }
             } else if (connection === 'open') {
                 isConnected = true;
                 qrImageBase64 = null;
-                addLog("✅ WhatsApp vinculado y autenticado correctamente en la Nube", "success");
+                addLog("✅ WhatsApp vinculado", "success");
                 iniciarMotorCobranzaCloud(sock);
             }
         });
@@ -305,9 +293,6 @@ async function startWhatsApp() {
 
 startWhatsApp();
 
-// ==========================================
-// 5. ENDPOINTS Y RUTAS EXPRESS
-// ==========================================
 app.post(['/settings', '/api/settings'], async (req, res) => {
     try {
         const { horaProgramada, estadoEnvio } = req.body;
@@ -316,8 +301,8 @@ app.post(['/settings', '/api/settings'], async (req, res) => {
             horaProgramada: horaProgramada || "",
             estadoEnvio: estadoEnvio || "Activo"
         }, { merge: true });
-        addLog(`⚙️ Configuración actualizada desde el panel: Hora -> ${horaProgramada}`, "success");
-        res.json({ success: true, message: "Settings guardados con éxito" });
+        addLog(`⚙️ Hora configurada: ${horaProgramada}`, "success");
+        res.json({ success: true, message: "OK" });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -337,43 +322,14 @@ app.get(['/logs', '/api/logs'], (req, res) => {
 
 app.get('/qr', (req, res) => {
     if (isConnected) {
-        return res.send(`
-            <!DOCTYPE html>
-            <html>
-            <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#22c55e;font-family:sans-serif;text-align:center;">
-                <div style="font-size:45px;margin-bottom:8px;">✅</div>
-                <div style="font-size:16px;font-weight:800;letter-spacing:0.5px;">WhatsApp Vinculado Exitosamente</div>
-                <div style="font-size:12px;color:#94a3b8;margin-top:4px;">Servidor Cloud 24/7 Activo</div>
-            </body>
-            </html>
-        `);
+        return res.send(`<h2 style="font-family:sans-serif;text-align:center;color:green;margin-top:20vh;">✅ WhatsApp Vinculado Exitosamente</h2>`);
     }
-
     if (!qrImageBase64) {
-        return res.send(`
-            <!DOCTYPE html>
-            <html>
-            <head><meta http-equiv="refresh" content="3"></head>
-            <body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#060a12;color:#38bdf8;font-family:sans-serif;text-align:center;">
-                <div style="font-size:30px;margin-bottom:8px;">⏳</div>
-                <div style="font-size:14px;font-weight:700;">Servidor operando con normalidad...</div>
-            </body>
-            </html>
-        `);
+        return res.send(`<h2 style="font-family:sans-serif;text-align:center;color:#38bdf8;margin-top:20vh;">⏳ Iniciando...</h2>`);
     }
-
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head><meta http-equiv="refresh" content="20"></head>
-        <body style="margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#ffffff;overflow:hidden;">
-            <img src="${qrImageBase64}" style="width:250px;height:250px;object-fit:contain;display:block;" />
-        </body>
-        </html>
-    `);
+    res.send(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="20"></head><body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#fff;"><img src="${qrImageBase64}" style="width:250px;height:250px;" /></body></html>`);
 });
 
 app.listen(PORT, () => {
     console.log(`🚀 Servidor listo en puerto ${PORT}`);
 });
-```[cite: 8]
