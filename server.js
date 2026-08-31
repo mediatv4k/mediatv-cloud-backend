@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const qrcode = require('qrcode');
 const pino = require('pino');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 
 const app = express();
 app.use(cors());
@@ -14,96 +14,107 @@ let qrImageBase64 = null;
 let isConnected = false;
 
 async function startWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_session');
-    
-    sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        printQRInTerminal: true
-    });
-
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState('auth_session');
         
-        if (qr) {
-            console.log('⚡ Nuevo código QR generado.');
-            qrImageBase64 = await qrcode.toDataURL(qr);
-            isConnected = false;
-        }
+        sock = makeWASocket({
+            auth: state,
+            logger: pino({ level: 'silent' }),
+            browser: Browsers.macOS('Desktop'),
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 0,
+            keepAliveIntervalMs: 10000
+        });
 
-        if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log(`Conexión cerrada. Reconectando: ${shouldReconnect}`);
-            isConnected = false;
-            if (shouldReconnect) {
-                setTimeout(startWhatsApp, 3000);
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            
+            if (qr) {
+                console.log('⚡ QR generado listo para escanear');
+                qrImageBase64 = await qrcode.toDataURL(qr);
+                isConnected = false;
             }
-        } else if (connection === 'open') {
-            console.log('✅ ¡WHATSAPP VINCULADO Y LISTO PARA ENVIAR!');
-            isConnected = true;
-            qrImageBase64 = null;
-        }
-    });
 
-    sock.ev.on('creds.update', saveCreds);
+            if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                console.log(`Estado desconectado (${statusCode}). Reconectando: ${shouldReconnect}`);
+                isConnected = false;
+                if (shouldReconnect) {
+                    setTimeout(startWhatsApp, 4000);
+                }
+            } else if (connection === 'open') {
+                console.log('✅ ¡WHATSAPP VINCULADO CON ÉXITO!');
+                isConnected = true;
+                qrImageBase64 = null;
+            }
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+    } catch (err) {
+        console.error("Error en socket:", err);
+        setTimeout(startWhatsApp, 5000);
+    }
 }
 
 startWhatsApp();
 
-// Ruta de estado
+// Estado general
 app.get('/', (req, res) => {
     res.json({
-        status: isConnected ? "CONNECTED" : "WAITING_QR",
+        status: isConnected ? "CONNECTED" : (qrImageBase64 ? "QR_READY" : "STARTING"),
         service: "MediaTV Cloud Bot 24/7"
     });
 });
 
-// Ruta visual para ver y escanear el QR desde el navegador
+// Pantalla con Auto-Recarga para escanear
 app.get('/qr', (req, res) => {
     if (isConnected) {
         return res.send(`
-            <div style="text-align:center;margin-top:50px;font-family:sans-serif;">
-                <h1 style="color:green;">✅ WhatsApp ya está vinculado y activo</h1>
-                <p>El servidor ya puede enviar mensajes automáticamente.</p>
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;">
+                <h1 style="color:#22c55e;">✅ WhatsApp ya está vinculado y activo</h1>
+                <p>El bot en la nube ya tiene control total para enviar mensajes.</p>
             </div>
         `);
     }
+
     if (!qrImageBase64) {
         return res.send(`
-            <div style="text-align:center;margin-top:50px;font-family:sans-serif;">
-                <h2>⏳ Generando código QR...</h2>
-                <p>Por favor, recarga esta página en 5 segundos.</p>
+            <head><meta http-equiv="refresh" content="3"></head>
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;">
+                <h2>⏳ Conectando con WhatsApp...</h2>
+                <p>Generando código QR. Esta pantalla se recargará sola en 3 segundos.</p>
             </div>
         `);
     }
+
     res.send(`
+        <head><meta http-equiv="refresh" content="20"></head>
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;">
-            <h2>📱 Escanea este código QR con tu WhatsApp</h2>
-            <p>Abre WhatsApp > Dispositivos vinculados > Vincular un dispositivo</p>
-            <img src="${qrImageBase64}" style="width:300px;height:300px;border:2px solid #333;padding:10px;border-radius:10px;" />
+            <h2 style="margin-bottom:5px;">📱 Escanea con tu WhatsApp</h2>
+            <p style="color:#666;margin-top:0;">WhatsApp > Dispositivos vinculados > Vincular un dispositivo</p>
+            <img src="${qrImageBase64}" style="width:320px;height:320px;border:3px solid #000;border-radius:12px;padding:10px;" />
+            <p style="font-size:12px;color:#888;">El código se renueva automáticamente cada 20s.</p>
         </div>
     `);
 });
 
-// Ruta receptora de mensajes
+// Envío de mensajes
 app.post('/send-message', async (req, res) => {
     const { phone, message } = req.body;
     if (!isConnected || !sock) {
-        return res.status(503).json({ success: false, error: "WhatsApp no está vinculado todavía." });
+        return res.status(503).json({ success: false, error: "WhatsApp no conectado." });
     }
     try {
         const cleanPhone = phone.replace(/\D/g, '');
         const jid = `${cleanPhone}@s.whatsapp.net`;
         await sock.sendMessage(jid, { text: message });
-        console.log(` Mensaje enviado con éxito a: ${cleanPhone}`);
         res.json({ success: true, target: cleanPhone });
     } catch (err) {
-        console.error("Error enviando mensaje:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor activo en puerto ${PORT}`);
+    console.log(`🚀 Servidor listo en puerto ${PORT}`);
 });
