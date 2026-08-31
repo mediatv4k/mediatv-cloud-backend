@@ -52,15 +52,25 @@ function addLog(msg, type = 'info') {
     if (cloudLogs.length > 50) cloudLogs.pop();
 }
 
+// Búsqueda inteligente e insensible a mayúsculas/acentos para evitar fallos
+function getProp(obj, possibleKeys) {
+    for (const k of possibleKeys) {
+        if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
+        const foundKey = Object.keys(obj).find(ek => ek.toLowerCase() === k.toLowerCase());
+        if (foundKey && obj[foundKey] !== undefined && obj[foundKey] !== null && obj[foundKey] !== '') return obj[foundKey];
+    }
+    return null;
+}
+
 // ==========================================
-// 3. CEREBRO: BOT DE COBRANZA CLOUD 24/7 (DISPARO AUTOMÁTICO CADA HORA EN :00 y :30)
+// 3. CEREBRO: BOT DE COBRANZA CLOUD 24/7 (BARRIDO AUTOMÁTICO CADA HORA EN :00 y :30)
 // ==========================================
 let botInterval = null;
 let ultimoMinutoProcesado = -1;
 
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 sincronizado con tu tabla de clientes...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 con escaneo inteligente de cartera...", "success");
 
     botInterval = setInterval(async () => {
         try {
@@ -69,19 +79,17 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
             const minutoActual = horaActualVE.getMinutes();
             const horaStr = String(horaActualVE.getHours()).padStart(2, '0') + ":" + String(minutoActual).padStart(2, '0');
             
-            // Dispara automáticamente en el minuto 00 o 30 de cada hora, evitando duplicados en el mismo minuto
             const esHoraDeCobro = (minutoActual === 0 || minutoActual === 30);
 
             if (esHoraDeCobro && ultimoMinutoProcesado !== minutoActual) {
                 ultimoMinutoProcesado = minutoActual;
-                addLog(`🚀 [BOT] Iniciando barrido automático de cartera a las ${horaStr} (VE)...`, "warning");
+                addLog(`🚀 [BOT] Iniciando barrido inteligente de cartera a las ${horaStr} (VE)...`, "warning");
                 
-                // RUTA: mediatv_data > admin
                 const adminRef = doc(db, 'mediatv_data', 'admin');
                 const adminSnap = await getDoc(adminRef);
                 
                 if (!adminSnap.exists()) {
-                    addLog(`❌ [BOT ERROR] No se encontró la base de datos de clientes`, "error");
+                    addLog(`❌ [BOT ERROR] No se encontró el documento admin en Firestore`, "error");
                     return;
                 }
 
@@ -93,19 +101,22 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                 let enviadosCount = 0;
 
                 for (const client of listaClientes) {
-                    // LLAVE EXACTA VISTA EN TU TABLA: 'Expira' o 'expira'
-                    const fechaExpStr = client.Expira || client.expira || client["Fecha Expira"] || client.VENCIMIENTO;
+                    const nombre = getProp(client, ['Nombre', 'nombre']) || 'Cliente';
+                    const usuario = getProp(client, ['Usuario', 'usuario']) || 'N/A';
+                    const fechaExpStr = getProp(client, ['Expira', 'expira', 'Fecha Expira', 'VENCIMIENTO']);
+                    const telRaw = getProp(client, ['Teléfono', 'telefono', 'Telefono', 'TELEFONO']);
+
                     if (!fechaExpStr) continue;
                     
-                    // Soporte para formato DD-MM-YYYY o YYYY-MM-DD
                     let fechaExp;
-                    if (fechaExpStr.includes('-') && fechaExpStr.split('-')[0].length === 4) {
-                        fechaExp = new Date(fechaExpStr + "T00:00:00");
-                    } else if (fechaExpStr.includes('-')) {
-                        const p = fechaExpStr.split('-');
+                    const cleanDate = String(fechaExpStr).trim();
+                    if (cleanDate.includes('-') && cleanDate.split('-')[0].length === 4) {
+                        fechaExp = new Date(cleanDate + "T00:00:00");
+                    } else if (cleanDate.includes('-')) {
+                        const p = cleanDate.split('-');
                         fechaExp = new Date(`${p[2]}-${p[1]}-${p[0]}T00:00:00`);
-                    } else if (fechaExpStr.includes('/')) {
-                        const p = fechaExpStr.split('/');
+                    } else if (cleanDate.includes('/')) {
+                        const p = cleanDate.split('/');
                         fechaExp = new Date(`${p[2]}-${p[1]}-${p[0]}T00:00:00`);
                     } else {
                         continue;
@@ -119,37 +130,34 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                     let mensaje = "";
                     let tipoEnvio = "";
 
-                    // REGLA 1: Por Vencer (1 a 5 días antes)
+                    // Regla: 0 a 5 días por vencer, o vencido hace 1 a 5 días
                     if (diffDays >= 0 && diffDays <= 5) {
                         tipoEnvio = "🟡 Por Vencer";
-                        mensaje = `¡Hola ${client.Nombre || client.nombre || 'Cliente'}! 🤝 Te saluda el *Equipo de Soporte de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${client.Usuario || client.usuario}*) vence en ${diffDays === 0 ? 'HOY' : diffDays + ' día(s)'}. ⏳\n\n💳 Puedes procesar tu renovación rápida y segura en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${client.Usuario || client.usuario}`;
-                    } 
-                    // REGLA 2: Vencidos Recientes (1 a 5 días después)
-                    else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
+                        mensaje = `¡Hola ${nombre}! 🤝 Te saluda el *Equipo de Soporte de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${usuario}*) vence en ${diffDays === 0 ? 'HOY' : diffDays + ' día(s)'}. ⏳\n\n💳 Puedes procesar tu renovación rápida y segura en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
+                    } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
                         const diasVencido = Math.abs(diffDays);
                         tipoEnvio = "🔴 Vencido Reciente";
-                        mensaje = `¡Hola ${client.Nombre || client.nombre || 'Cliente'}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${client.Usuario || client.usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡No te quedes sin tu entretenimiento! Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${client.Usuario || client.usuario}`;
+                        mensaje = `¡Hola ${nombre}! ⚠️ Te saluda el *Equipo de Soporte de MediaTV*.\n\nNotamos que tu suscripción para el usuario (*${usuario}*) venció hace ${diasVencido} día(s). 🔴\n\n✨ ¡No te quedes sin tu entretenimiento! Reactiva tu cuenta al instante en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}`;
                     }
 
-                    const telRaw = client.Teléfono || client.telefono || client.TELEFONO;
                     if (mensaje && telRaw) {
                         let telefono = String(telRaw).replace(/\D/g, '');
                         if (telefono.length >= 10) {
                             const jid = telefono + "@s.whatsapp.net";
                             await whatsappClient.sendMessage(jid, { text: mensaje });
                             enviadosCount++;
-                            addLog(`✅ Cobro [${tipoEnvio}] enviado a ${client.Nombre || 'Cliente'} (${telefono})`, "success");
+                            addLog(`✅ Cobro [${tipoEnvio}] enviado a ${nombre} (${telefono})`, "success");
                             await new Promise(r => setTimeout(r, 4000));
                         }
                     }
                 }
-                addLog(`🎯 Barrido finalizado. Total cobros despachados: ${enviadosCount}`, "success");
+                addLog(`🎯 Barrido inteligente finalizado. Total cobros despachados: ${enviadosCount}`, "success");
             }
         } catch (error) {
             addLog(`❌ [BOT ERROR] ${error.message}`, "error");
             console.error(error);
         }
-    }, 20000); // Revisa el reloj cada 20 segundos
+    }, 20000);
 }
 
 // ==========================================
@@ -196,7 +204,6 @@ async function startWhatsApp() {
                 qrImageBase64 = null;
                 addLog("✅ WhatsApp vinculado y autenticado correctamente", "success");
                 
-                // ENCENDIDO DEL BOT
                 iniciarMotorCobranzaCloud(sock);
             }
         });
