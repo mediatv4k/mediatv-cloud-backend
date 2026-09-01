@@ -126,31 +126,33 @@ function getProp(obj, possibleKeys) {
 
 let botInterval = null;
 let ultimoMinutoProcesado = -1;
+let ultimoDiaProcesado = ""; // CANDADO ESTRICTO: Solo permite 1 ejecución por día
 
 function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
-    if (!horaProg) return currentMinutes === 0;
-    const clean = String(horaProg).toLowerCase().trim();
+    if (!horaProg) return currentHours24 === 19 && currentMinutes === 0; // Por defecto a las 7:00 PM, NO cada hora
+    const clean = String(horaProg).toLowerCase().replace(/\s+/g, '').trim();
     
     if (/^\d{1,2}:\d{2}$/.test(clean)) {
         const [h, m] = clean.split(':').map(Number);
         return currentHours24 === h && currentMinutes === m;
     }
     
-    const match = clean.match(/(\d{1,2}):(\d{2})\s*(a|p)/);
+    const match = clean.match(/(\d{1,2}):(\d{2})(am|pm|a\.m\.|p\.m\.|a|p)/);
     if (match) {
         let h = parseInt(match[1], 10);
         const m = parseInt(match[2], 10);
-        const isPm = match[3] === 'p';
+        const period = match[3];
+        const isPm = period.startsWith('p');
         if (isPm && h < 12) h += 12;
         if (!isPm && h === 12) h = 0;
         return currentHours24 === h && currentMinutes === m;
     }
-    return currentMinutes === 0;
+    return currentHours24 === 19 && currentMinutes === 0; // Resguardo seguro a las 7:00 PM
 }
 
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 sincronizado...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 sincronizado con candado diario...", "success");
 
     botInterval = setInterval(async () => {
         try {
@@ -159,6 +161,11 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
             const currentHours24 = horaActualVE.getHours();
             const minutoActual = horaActualVE.getMinutes();
             const claveMinutoUnica = `${currentHours24}-${minutoActual}`;
+            
+            const anio = horaActualVE.getFullYear();
+            const mes = String(horaActualVE.getMonth() + 1).padStart(2, '0');
+            const dia = String(horaActualVE.getDate()).padStart(2, '0');
+            const hoyStr = `${anio}-${mes}-${dia}`;
             
             const adminRef = doc(db, 'mediatv_data', 'admin');
             const adminSnap = await getDoc(adminRef);
@@ -169,10 +176,13 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
 
             const esHoraDeCobro = matchesScheduledTime(horaProgramadaPanel, currentHours24, minutoActual);
 
-            if (esHoraDeCobro && ultimoMinutoProcesado !== claveMinutoUnica) {
+            // DOBLE VALIDACIÓN: Hora exacta Y que no se haya ejecutado hoy
+            if (esHoraDeCobro && ultimoMinutoProcesado !== claveMinutoUnica && ultimoDiaProcesado !== hoyStr) {
                 ultimoMinutoProcesado = claveMinutoUnica;
+                ultimoDiaProcesado = hoyStr; // BLOQUEA EL RESTO DEL DÍA
+                
                 const horaStrVE = String(currentHours24).padStart(2, '0') + ":" + String(minutoActual).padStart(2, '0');
-                addLog(`🚀 [BOT] Barrido activado a las ${horaStrVE} (VE)...`, "warning");
+                addLog(`🚀 [BOT] Barrido diario activado a las ${horaStrVE} (VE)...`, "warning");
                 
                 const listaClientes = dataAdmin.clientes || [];
                 const hoy = new Date(horaActualVE.getFullYear(), horaActualVE.getMonth(), horaActualVE.getDate());
@@ -213,11 +223,11 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
 
                     if (diffDays >= 0 && diffDays <= 5) {
                         tipoEnvio = "🟡 Por Vencer";
-                        mensaje = `¡Hola ${nombre}! 👋 Te escribimos de MediaTV 4K.\n\nTu servicio para el usuario (${usuario}) está próximo a vencer en ${diffDays === 0 ? 'HOY' : diffDays + ' día(s)'} (Vence el: ${fechaExpStr}). 🚨\n\n💳 Evita interrupciones pagando directo en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 Tus Datos de Acceso:\n👤 Usuario: ${usuario}\n🔑 Contraseña: ${password}`;
+                        mensaje = `¡Hola ${nombre}! 👋 Te saluda el *Equipo de Soporte Técnico de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${usuario}*) vence el ${fechaExpStr}.\n\n💳 Puedes procesar tu renovación rápida y segura aquí:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 *Tus Datos de Acceso (Guárdalos bien):*\n👤 *Usuario:* ${usuario}\n🔑 *Contraseña:* ${password}\n\n¡Mantén tu entretenimiento en 4K activo al instante! ✨`;
                     } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
                         const diasVencido = Math.abs(diffDays);
                         tipoEnvio = "🔴 Vencido Reciente";
-                        mensaje = `¡Hola ${nombre}! 👋 Te escribimos de MediaTV 4K.\n\nTu servicio para el usuario (${usuario}) venció hace ${diasVencido} día(s) (Venció el: ${fechaExpStr}). 🚨\n\n💳 Reactiva tu cuenta pagando directo en nuestra taquilla virtual:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 Tus Datos de Acceso:\n👤 Usuario: ${usuario}\n🔑 Contraseña: ${password}`;
+                        mensaje = `¡Hola ${nombre}! 👋 Te saluda el *Equipo de Soporte Técnico de MediaTV*.\n\nTe informamos que tu servicio para el usuario (*${usuario}*) venció hace ${diasVencido} día(s) (el ${fechaExpStr}). ⚠️\n\n💳 Puedes procesar tu renovación rápida y segura aquí:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 *Tus Datos de Acceso (Guárdalos bien):*\n👤 *Usuario:* ${usuario}\n🔑 *Contraseña:* ${password}\n\n¡Reactiva tu entretenimiento en 4K al instante! ✨`;
                     }
 
                     if (mensaje && telRaw) {
