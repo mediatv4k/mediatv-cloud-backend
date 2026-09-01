@@ -126,33 +126,35 @@ function getProp(obj, possibleKeys) {
 
 let botInterval = null;
 let ultimoMinutoProcesado = -1;
-let ultimoDiaProcesado = ""; // CANDADO ESTRICTO: Solo permite 1 ejecución por día
+let ultimoDiaProcesado = ""; // CANDADO ABSOLUTO: Impide más de 1 ejecución al día bajo ninguna circunstancia
 
 function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
-    if (!horaProg) return currentHours24 === 19 && currentMinutes === 0; // Por defecto a las 7:00 PM, NO cada hora
+    if (!horaProg) return false; // CERO DISPAROS AUTOMÁTICOS SI NO HAY HORA EN EL PANEL
     const clean = String(horaProg).toLowerCase().replace(/\s+/g, '').trim();
     
+    // Formato 24 horas (ej: 19:00 o 7:00)
     if (/^\d{1,2}:\d{2}$/.test(clean)) {
         const [h, m] = clean.split(':').map(Number);
         return currentHours24 === h && currentMinutes === m;
     }
     
-    const match = clean.match(/(\d{1,2}):(\d{2})(am|pm|a\.m\.|p\.m\.|a|p)/);
+    // Formato 12 horas con am/pm (ej: 7:00pm, 7:00p.m., 07:00pm)
+    const match = clean.match(/(\d{1,2}):(\d{2})/);
     if (match) {
         let h = parseInt(match[1], 10);
         const m = parseInt(match[2], 10);
-        const period = match[3];
-        const isPm = period.startsWith('p');
-        if (isPm && h < 12) h += 12;
-        if (!isPm && h === 12) h = 0;
+        
+        if (clean.includes('p') && h < 12) h += 12;
+        if (clean.includes('a') && h === 12) h = 0;
+        
         return currentHours24 === h && currentMinutes === m;
     }
-    return currentHours24 === 19 && currentMinutes === 0; // Resguardo seguro a las 7:00 PM
+    return false;
 }
 
 function iniciarMotorCobranzaCloud(whatsappClient) {
     if (botInterval) clearInterval(botInterval); 
-    addLog("🤖 Cerebro Cloud 24/7 sincronizado con candado diario...", "success");
+    addLog("🤖 Cerebro Cloud 24/7 sincronizado con control absoluto del panel...", "success");
 
     botInterval = setInterval(async () => {
         try {
@@ -176,13 +178,13 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
 
             const esHoraDeCobro = matchesScheduledTime(horaProgramadaPanel, currentHours24, minutoActual);
 
-            // DOBLE VALIDACIÓN: Hora exacta Y que no se haya ejecutado hoy
+            // CONDICIÓN ESTRICTA: Hora exacta del panel Y que no se haya ejecutado hoy en todo el día
             if (esHoraDeCobro && ultimoMinutoProcesado !== claveMinutoUnica && ultimoDiaProcesado !== hoyStr) {
                 ultimoMinutoProcesado = claveMinutoUnica;
-                ultimoDiaProcesado = hoyStr; // BLOQUEA EL RESTO DEL DÍA
+                ultimoDiaProcesado = hoyStr; // BLOQUEA EL RESTO DEL DÍA COMPLETAMENTE
                 
                 const horaStrVE = String(currentHours24).padStart(2, '0') + ":" + String(minutoActual).padStart(2, '0');
-                addLog(`🚀 [BOT] Barrido diario activado a las ${horaStrVE} (VE)...`, "warning");
+                addLog(`🚀 [BOT] Barrido diario autorizado por el panel a las ${horaStrVE} (VE)...`, "warning");
                 
                 const listaClientes = dataAdmin.clientes || [];
                 const hoy = new Date(horaActualVE.getFullYear(), horaActualVE.getMonth(), horaActualVE.getDate());
@@ -249,7 +251,7 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
     }, 20000);
 }
 
-addLog("🟢 Servidor Cloud iniciado", "success");
+addLog("🟢 Servidor Cloud iniciado con control de panel", "success");
 
 async function startWhatsApp() {
     try {
@@ -312,7 +314,7 @@ app.post(['/settings', '/api/settings'], async (req, res) => {
             horaProgramada: horaProgramada || "",
             estadoEnvio: estadoEnvio || "Activo"
         }, { merge: true });
-        addLog(`⚙️ Hora configurada: ${horaProgramada}`, "success");
+        addLog(`⚙️ Hora configurada desde el panel: ${horaProgramada}`, "success");
         res.json({ success: true, message: "OK" });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
