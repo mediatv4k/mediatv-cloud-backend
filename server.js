@@ -5,7 +5,35 @@ const pino = require('pino');
 const {
     default: makeWASocket,
     DisconnectReason,
-    fetchLatestBaileysVersion,
+    fetchLatestBaileysVersion,function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
+    if (!horaProg) return false;
+    const clean = String(horaProg).toLowerCase().replace(/\s+/g, '').trim();
+    
+    // Si viene en formato de 24 horas estricto (ej: 19:00)
+    if (/^\d{1,2}:\d{2}$/.test(clean)) {
+        const [h, m] = clean.split(':').map(Number);
+        return currentHours24 === h && currentMinutes === m;
+    }
+    
+    // Si viene en formato de 12 horas con am/pm (ej: 08:15p.m. o 8:15pm)
+    // Extraemos todos los dígitos numéricos de la cadena de texto de forma segura
+    const matches = clean.match(/(\d{1,2}):(\d{2})/);
+    if (matches) {
+        let h = parseInt(matches[1], 10);
+        const m = parseInt(matches[2], 10);
+        
+        // Evaluamos si contiene indicador PM (p, p.m., pm)
+        const esPm = clean.includes('p');
+        // Evaluamos si contiene indicador AM (a, a.m., am)
+        const esAm = clean.includes('a');
+        
+        if (esPm && h < 12) h += 12;
+        if (esAm && h === 12) h = 0;
+        
+        return currentHours24 === h && currentMinutes === m;
+    }
+    return false;
+}
     Browsers,
     initAuthCreds,
     BufferJSON
