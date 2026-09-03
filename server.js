@@ -26,12 +26,17 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
+// CORRECCIÓN: Ahora esta función sí limpia la basura acumulada en la base de datos
 async function limpiarSesionesAntiguas() {
     try {
         const querySnapshot = await getDocs(collection(db, 'mediatv_data'));
+        const batch = [];
         querySnapshot.forEach((document) => {
-            if (document.id.startsWith('wa_session_') && document.id !== 'wa_session_creds') {}
+            if (document.id.startsWith('wa_session_') && document.id !== 'wa_session_creds') {
+                batch.push(deleteDoc(doc(db, 'mediatv_data', document.id)));
+            }
         });
+        await Promise.all(batch);
     } catch (e) {}
 }
 
@@ -272,10 +277,7 @@ async function startWhatsApp() {
 
         sock = makeWASocket({
             version,
-            auth: {
-                creds: state.creds,
-                keys: state.keys
-            },
+            auth: { creds: state.creds, keys: state.keys },
             logger: pino({ level: 'silent' }),
             browser: Browsers.ubuntu('Chrome'),
             printQRInTerminal: false,
@@ -288,7 +290,7 @@ async function startWhatsApp() {
             if (qr) {
                 qrImageBase64 = await qrcode.toDataURL(qr, { margin: 1, width: 260 });
                 isConnected = false;
-                addLog("⚡ QR Generado", "warning");
+                addLog("⚡ QR Generado, esperando escaneo...", "warning");
             }
 
             if (connection === 'close') {
@@ -317,17 +319,41 @@ async function startWhatsApp() {
 
 startWhatsApp();
 
+// NUEVO ENDPOINT DE EMERGENCIA: Limpia la sesión corrupta desde el panel frontal
+app.post(['/api/reset-whatsapp', '/reset-whatsapp'], async (req, res) => {
+    try {
+        addLog("♻️ Orden de reseteo recibida. Borrando caché...", "warning");
+        const querySnapshot = await getDocs(collection(db, 'mediatv_data'));
+        const tasks = [];
+        querySnapshot.forEach((document) => {
+            if (document.id.startsWith('wa_session_')) {
+                tasks.push(deleteDoc(doc(db, 'mediatv_data', document.id)));
+            }
+        });
+        await Promise.all(tasks);
+        
+        qrImageBase64 = null;
+        isConnected = false;
+        
+        if (sock) {
+            try { sock.logout(); } catch(e){}
+            sock = null;
+        }
+        
+        addLog("🗑️ Caché eliminado. Reiniciando núcleo de WhatsApp...", "info");
+        setTimeout(startWhatsApp, 2000);
+        res.json({ success: true, message: "Reinicio profundo en proceso" });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 app.post(['/settings', '/api/settings', '/api/admin-config', '/admin-config'], async (req, res) => {
     try {
         const horaProgramada = req.body.horaProgramada || req.body.hour || "";
         const estadoEnvio = req.body.estadoEnvio || req.body.status || "Activo";
-        
         const adminRef = doc(db, 'mediatv_data', 'admin');
-        await setDoc(adminRef, { 
-            horaProgramada: horaProgramada,
-            estadoEnvio: estadoEnvio
-        }, { merge: true });
-        
+        await setDoc(adminRef, { horaProgramada: horaProgramada, estadoEnvio: estadoEnvio }, { merge: true });
         addLog(`⚙️ Hora configurada desde el panel: ${horaProgramada}`, "success");
         res.json({ success: true, message: "OK" });
     } catch (e) {
@@ -348,25 +374,6 @@ app.post(['/api/forzar-barrido', '/forzar-barrido'], async (req, res) => {
     }
 });
 
-app.post('/api/enviar-notificacion', async (req, res) => {
-    try {
-        const { telefono, mensaje, usuario } = req.body;
-        if (!sock || !isConnected) {
-            return res.status(400).json({ success: false, error: "WhatsApp no conectado en la nube" });
-        }
-        let jid = String(telefono).replace(/\D/g, '');
-        if (!jid.startsWith('58')) jid = '58' + jid;
-        jid += '@s.whatsapp.net';
-
-        await sock.sendMessage(jid, { text: mensaje });
-        addLog(`📤 [PRUEBA] Enviado a ${usuario} (${telefono})`, "success");
-        res.json({ success: true, message: "Enviado con éxito" });
-    } catch (e) {
-        addLog(`❌ Error en envío de prueba: ${e.message}`, "error");
-        res.status(500).json({ success: false, error: "Error enviando notificación" });
-    }
-});
-
 app.get(['/', '/status', '/api/status'], (req, res) => {
     res.json({
         status: isConnected ? "CONNECTED" : (qrImageBase64 ? "QR_READY" : "STARTING"),
@@ -384,9 +391,9 @@ app.get('/qr', (req, res) => {
         return res.send(`<h2 style="font-family:sans-serif;text-align:center;color:green;margin-top:20vh;">✅ WhatsApp Vinculado Exitosamente</h2>`);
     }
     if (!qrImageBase64) {
-        return res.send(`<h2 style="font-family:sans-serif;text-align:center;color:#38bdf8;margin-top:20vh;">⏳ Iniciando...</h2>`);
+        return res.send(`<h2 style="font-family:sans-serif;text-align:center;color:#38bdf8;margin-top:20vh;">⏳ Iniciando núcleo de WhatsApp...</h2>`);
     }
-    res.send(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="20"></head><body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#fff;"><img src="${qrImageBase64}" style="width:250px;height:250px;" /></body></html>`);
+    res.send(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="5"></head><body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#060a12;"><img src="${qrImageBase64}" style="width:250px;height:250px;border-radius:12px;box-shadow:0 0 15px rgba(0,159,227,0.5);" /></body></html>`);
 });
 
 app.listen(PORT, () => {
