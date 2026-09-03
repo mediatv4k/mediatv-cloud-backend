@@ -109,9 +109,10 @@ function getTimestamp() {
     return new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
 }
 
+// CORRECCIÓN: Se incluyen 'text' y 'msg' para que el frontend los lea sin problemas
 function addLog(msg, type = 'info') {
     const time = getTimestamp();
-    cloudLogs.unshift({ time, msg, type });
+    cloudLogs.unshift({ time, text: msg, msg, type });
     if (cloudLogs.length > 50) cloudLogs.pop();
 }
 
@@ -303,7 +304,6 @@ async function startWhatsApp() {
 
 startWhatsApp();
 
-// Endpoints unificados para garantizar compatibilidad con el panel web
 app.post(['/settings', '/api/settings', '/api/admin-config', '/admin-config'], async (req, res) => {
     try {
         const { horaProgramada, estadoEnvio } = req.body;
