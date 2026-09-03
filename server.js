@@ -124,6 +124,79 @@ function getProp(obj, possibleKeys) {
     return null;
 }
 
+// Función maestra de barrido reutilizable tanto para el bot automático como para el botón manual
+async function ejecutarLogicaBarrido(whatsappClient, origenManual = false) {
+    const adminRef = doc(db, 'mediatv_data', 'admin');
+    const adminSnap = await getDoc(adminRef);
+    
+    if (!adminSnap.exists()) return 0;
+    const dataAdmin = adminSnap.data();
+    const listaClientes = dataAdmin.clientes || [];
+    
+    const now = new Date();
+    const horaActualVE = new Date(now.getTime() - (4 * 60 * 60 * 1000));
+    const hoy = new Date(horaActualVE.getFullYear(), horaActualVE.getMonth(), horaActualVE.getDate());
+    let enviadosCount = 0;
+
+    addLog(origenManual ? "⚡ [MANUAL] Ejecutando barrido forzado desde el panel..." : "🚀 [BOT] Iniciando barrido automático...", "warning");
+
+    for (const client of listaClientes) {
+        const usuario = getProp(client, ['Usuario', 'usuario', 'USUARIO']);
+        if (!usuario) continue;
+
+        const nombre = getProp(client, ['Nombre Completo', 'nombreCompleto', 'Nombre', 'nombre', 'NOMBRE']) || 'Cliente';
+        const fechaExpStr = getProp(client, ['Fecha Expira', 'fechaExpira', 'Expira', 'expira', 'VENCIMIENTO', 'FECHA_EXPIRA']);
+        const telRaw = getProp(client, ['Teléfono', 'telefono', 'Telefono', 'TELEFONO']);
+        const password = getProp(client, ['CONTRASEÑA', 'Contraseña', 'password', 'clave', 'Clave']) || '';
+
+        if (!fechaExpStr) continue;
+        
+        let fechaExp;
+        const cleanDate = String(fechaExpStr).trim();
+        if (cleanDate.includes('-') && cleanDate.split('-')[0].length === 4) {
+            fechaExp = new Date(cleanDate + "T00:00:00");
+        } else if (cleanDate.includes('-')) {
+            const p = cleanDate.split('-');
+            fechaExp = new Date(`${p[2]}-${p[1]}-${p[0]}T00:00:00`);
+        } else if (cleanDate.includes('/')) {
+            const p = cleanDate.split('/');
+            fechaExp = new Date(`${p[2]}-${p[1]}-${p[0]}T00:00:00`);
+        } else {
+            continue;
+        }
+
+        if (isNaN(fechaExp.getTime())) continue;
+
+        const diffTime = fechaExp - hoy;
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        let mensaje = "";
+        let tipoEnvio = "";
+
+        if (diffDays >= 0 && diffDays <= 5) {
+            tipoEnvio = "🟡 Por Vencer";
+            mensaje = `¡Hola ${nombre}! 👋 Te saluda el *Equipo de Soporte Técnico de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${usuario}*) vence el ${fechaExpStr}.\n\n💳 Puedes procesar tu renovación rápida y segura aquí:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 *Tus Datos de Acceso (Guárdalos bien):*\n👤 *Usuario:* ${usuario}\n🔑 *Contraseña:* ${password}\n\n¡Mantén tu entretenimiento en 4K activo al instante! ✨`;
+        } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
+            const diasVencido = Math.abs(diffDays);
+            tipoEnvio = "🔴 Vencido Reciente";
+            mensaje = `¡Hola ${nombre}! 👋 Te saluda el *Equipo de Soporte Técnico de MediaTV*.\n\nTe informamos que tu servicio para el usuario (*${usuario}*) venció hace ${diasVencido} día(s) (el ${fechaExpStr}). ⚠️\n\n💳 Puedes procesar tu renovación rápida y segura aquí:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 *Tus Datos de Acceso (Guárdalos bien):*\n👤 *Usuario:* ${usuario}\n🔑 *Contraseña:* ${password}\n\n¡Reactiva tu entretenimiento en 4K al instante! ✨`;
+        }
+
+        if (mensaje && telRaw) {
+            let telefono = String(telRaw).replace(/\D/g, '');
+            if (telefono.length >= 10) {
+                const jid = telefono + "@s.whatsapp.net";
+                await whatsappClient.sendMessage(jid, { text: mensaje });
+                enviadosCount++;
+                addLog(`✅ Cobro [${tipoEnvio}] enviado a ${nombre} (Usuario: ${usuario})`, "success");
+                await new Promise(r => setTimeout(r, 4000));
+            }
+        }
+    }
+    addLog(`🎯 Barrido finalizado. Total notificaciones enviadas: ${enviadosCount}`, "success");
+    return enviadosCount;
+}
+
 let botInterval = null;
 let ultimoMinutoProcesado = -1;
 let ultimoDiaProcesado = ""; 
@@ -173,74 +246,16 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
             if (!adminSnap.exists()) return;
             const dataAdmin = adminSnap.data();
             const horaProgramadaPanel = dataAdmin.horaProgramada || (dataAdmin.botConfig && dataAdmin.botConfig.hour);
+            const estadoEnvio = dataAdmin.estadoEnvio || "Activo";
+
+            if (estadoEnvio === "Pausado") return;
 
             const esHoraDeCobro = matchesScheduledTime(horaProgramadaPanel, currentHours24, minutoActual);
 
             if (esHoraDeCobro && ultimoMinutoProcesado !== claveMinutoUnica && ultimoDiaProcesado !== hoyStr) {
                 ultimoMinutoProcesado = claveMinutoUnica;
                 ultimoDiaProcesado = hoyStr; 
-                
-                const horaStrVE = String(currentHours24).padStart(2, '0') + ":" + String(minutoActual).padStart(2, '0');
-                addLog(`🚀 [BOT] Barrido diario autorizado por el panel a las ${horaStrVE} (VE)...`, "warning");
-                
-                const listaClientes = dataAdmin.clientes || [];
-                const hoy = new Date(horaActualVE.getFullYear(), horaActualVE.getMonth(), horaActualVE.getDate());
-                let enviadosCount = 0;
-
-                for (const client of listaClientes) {
-                    const usuario = getProp(client, ['Usuario', 'usuario', 'USUARIO']);
-                    if (!usuario) continue;
-
-                    const nombre = getProp(client, ['Nombre Completo', 'nombreCompleto', 'Nombre', 'nombre', 'NOMBRE']) || 'Cliente';
-                    const fechaExpStr = getProp(client, ['Fecha Expira', 'fechaExpira', 'Expira', 'expira', 'VENCIMIENTO', 'FECHA_EXPIRA']);
-                    const telRaw = getProp(client, ['Teléfono', 'telefono', 'Telefono', 'TELEFONO']);
-                    const password = getProp(client, ['CONTRASEÑA', 'Contraseña', 'password', 'clave', 'Clave']) || '';
-
-                    if (!fechaExpStr) continue;
-                    
-                    let fechaExp;
-                    const cleanDate = String(fechaExpStr).trim();
-                    if (cleanDate.includes('-') && cleanDate.split('-')[0].length === 4) {
-                        fechaExp = new Date(cleanDate + "T00:00:00");
-                    } else if (cleanDate.includes('-')) {
-                        const p = cleanDate.split('-');
-                        fechaExp = new Date(`${p[2]}-${p[1]}-${p[0]}T00:00:00`);
-                    } else if (cleanDate.includes('/')) {
-                        const p = cleanDate.split('/');
-                        fechaExp = new Date(`${p[2]}-${p[1]}-${p[0]}T00:00:00`);
-                    } else {
-                        continue;
-                    }
-
-                    if (isNaN(fechaExp.getTime())) continue;
-
-                    const diffTime = fechaExp - hoy;
-                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-                    let mensaje = "";
-                    let tipoEnvio = "";
-
-                    if (diffDays >= 0 && diffDays <= 5) {
-                        tipoEnvio = "🟡 Por Vencer";
-                        mensaje = `¡Hola ${nombre}! 👋 Te saluda el *Equipo de Soporte Técnico de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${usuario}*) vence el ${fechaExpStr}.\n\n💳 Puedes procesar tu renovación rápida y segura aquí:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 *Tus Datos de Acceso (Guárdalos bien):*\n👤 *Usuario:* ${usuario}\n🔑 *Contraseña:* ${password}\n\n¡Mantén tu entretenimiento en 4K activo al instante! ✨`;
-                    } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
-                        const diasVencido = Math.abs(diffDays);
-                        tipoEnvio = "🔴 Vencido Reciente";
-                        mensaje = `¡Hola ${nombre}! 👋 Te saluda el *Equipo de Soporte Técnico de MediaTV*.\n\nTe informamos que tu servicio para el usuario (*${usuario}*) venció hace ${diasVencido} día(s) (el ${fechaExpStr}). ⚠️\n\n💳 Puedes procesar tu renovación rápida y segura aquí:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 *Tus Datos de Acceso (Guárdalos bien):*\n👤 *Usuario:* ${usuario}\n🔑 *Contraseña:* ${password}\n\n¡Reactiva tu entretenimiento en 4K al instante! ✨`;
-                    }
-
-                    if (mensaje && telRaw) {
-                        let telefono = String(telRaw).replace(/\D/g, '');
-                        if (telefono.length >= 10) {
-                            const jid = telefono + "@s.whatsapp.net";
-                            await whatsappClient.sendMessage(jid, { text: mensaje });
-                            enviadosCount++;
-                            addLog(`✅ Cobro [${tipoEnvio}] enviado a ${nombre} (Usuario: ${usuario})`, "success");
-                            await new Promise(r => setTimeout(r, 4000));
-                        }
-                    }
-                }
-                addLog(`🎯 Barrido finalizado. Total: ${enviadosCount}`, "success");
+                await ejecutarLogicaBarrido(whatsappClient, false);
             }
         } catch (error) {
             addLog(`❌ [BOT ERROR] ${error.message}`, "error");
@@ -303,7 +318,6 @@ async function startWhatsApp() {
 
 startWhatsApp();
 
-// ENDPOINT UNIVERSAL PARA RECIBIR LA CONFIGURACIÓN DESDE CUALQUIER RUTA DEL PANEL
 app.post(['/settings', '/api/settings', '/api/admin-config', '/admin-config'], async (req, res) => {
     try {
         const horaProgramada = req.body.horaProgramada || req.body.hour || "";
@@ -318,6 +332,20 @@ app.post(['/settings', '/api/settings', '/api/admin-config', '/admin-config'], a
         addLog(`⚙️ Hora configurada desde el panel: ${horaProgramada}`, "success");
         res.json({ success: true, message: "OK" });
     } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// NUEVO ENDPOINT: Permite forzar el barrido de cobros de inmediato con un clic desde el panel
+app.post(['/api/forzar-barrido', '/forzar-barrido'], async (req, res) => {
+    try {
+        if (!sock || !isConnected) {
+            return res.status(400).json({ success: false, error: "WhatsApp no está conectado en la nube." });
+        }
+        const totalEnviados = await ejecutarLogicaBarrido(sock, true);
+        res.json({ success: true, message: "Barrido forzado ejecutado con éxito", enviados: totalEnviados });
+    } catch (e) {
+        addLog(`❌ Error en barrido forzado: ${e.message}`, "error");
         res.status(500).json({ success: false, error: e.message });
     }
 });
