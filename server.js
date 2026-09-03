@@ -109,7 +109,6 @@ function getTimestamp() {
     return new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
 }
 
-// CORRECCIÓN: Se incluyen 'text' y 'msg' para que el frontend los lea sin problemas
 function addLog(msg, type = 'info') {
     const time = getTimestamp();
     cloudLogs.unshift({ time, text: msg, msg, type });
@@ -304,14 +303,18 @@ async function startWhatsApp() {
 
 startWhatsApp();
 
+// ENDPOINT UNIVERSAL PARA RECIBIR LA CONFIGURACIÓN DESDE CUALQUIER RUTA DEL PANEL
 app.post(['/settings', '/api/settings', '/api/admin-config', '/admin-config'], async (req, res) => {
     try {
-        const { horaProgramada, estadoEnvio } = req.body;
+        const horaProgramada = req.body.horaProgramada || req.body.hour || "";
+        const estadoEnvio = req.body.estadoEnvio || req.body.status || "Activo";
+        
         const adminRef = doc(db, 'mediatv_data', 'admin');
         await setDoc(adminRef, { 
-            horaProgramada: horaProgramada || "",
-            estadoEnvio: estadoEnvio || "Activo"
+            horaProgramada: horaProgramada,
+            estadoEnvio: estadoEnvio
         }, { merge: true });
+        
         addLog(`⚙️ Hora configurada desde el panel: ${horaProgramada}`, "success");
         res.json({ success: true, message: "OK" });
     } catch (e) {
