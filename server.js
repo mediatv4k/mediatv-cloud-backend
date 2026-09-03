@@ -5,35 +5,7 @@ const pino = require('pino');
 const {
     default: makeWASocket,
     DisconnectReason,
-    fetchLatestBaileysVersion,function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
-    if (!horaProg) return false;
-    const clean = String(horaProg).toLowerCase().replace(/\s+/g, '').trim();
-    
-    // Si viene en formato de 24 horas estricto (ej: 19:00)
-    if (/^\d{1,2}:\d{2}$/.test(clean)) {
-        const [h, m] = clean.split(':').map(Number);
-        return currentHours24 === h && currentMinutes === m;
-    }
-    
-    // Si viene en formato de 12 horas con am/pm (ej: 08:15p.m. o 8:15pm)
-    // Extraemos todos los dígitos numéricos de la cadena de texto de forma segura
-    const matches = clean.match(/(\d{1,2}):(\d{2})/);
-    if (matches) {
-        let h = parseInt(matches[1], 10);
-        const m = parseInt(matches[2], 10);
-        
-        // Evaluamos si contiene indicador PM (p, p.m., pm)
-        const esPm = clean.includes('p');
-        // Evaluamos si contiene indicador AM (a, a.m., am)
-        const esAm = clean.includes('a');
-        
-        if (esPm && h < 12) h += 12;
-        if (esAm && h === 12) h = 0;
-        
-        return currentHours24 === h && currentMinutes === m;
-    }
-    return false;
-}
+    fetchLatestBaileysVersion,
     Browsers,
     initAuthCreds,
     BufferJSON
@@ -220,7 +192,7 @@ function matchesScheduledTime(horaProg, currentHours24, currentMinutes) {
         return currentHours24 === h && currentMinutes === m;
     }
     
-    const match = clean.match(/(\d{1,2}):(\d{2})*/);
+    const match = clean.match(/(\d{1,2}):(\d{2})/);
     if (match) {
         let h = parseInt(match[1], 10);
         const m = parseInt(match[2], 10);
@@ -291,13 +263,11 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                     let enviar = false;
                     let tipoMensaje = "";
 
-                    if (diffDays === 2) {
+                    // RANGO AMPLIADO: 0 a 5 días por vencer o hasta 5 días vencidos
+                    if (diffDays >= 0 && diffDays <= 5) {
                         enviar = true;
                         tipoMensaje = "POR_VENCER";
-                    } else if (diffDays === 0) {
-                        enviar = true;
-                        tipoMensaje = "VENCE_HOY";
-                    } else if (diffDays >= -3 && diffDays < 0) {
+                    } else if (diffDays >= -5 && diffDays < 0) {
                         enviar = true;
                         tipoMensaje = "VENCIDO";
                     }
@@ -308,10 +278,9 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                         jid += '@s.whatsapp.net';
 
                         let mensaje = "";
-                        // ENLACE CORREGIDO Y BLINDADO APUNTANDO A LA RAÍZ CON PARÁMETRO SEGURO
                         const linkPagoSeguro = `https://mediatv-4k.vercel.app/?user=${encodeURIComponent(usuario)}`;
 
-                        if (tipoMensaje === "POR_VENCER" || tipoMensaje === "VENCE_HOY") {
+                        if (tipoMensaje === "POR_VENCER") {
                             const fechaFormateada = expDate.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
                             mensaje = `¡Hola ${nombre}! 👋 Te saluda el *Equipo de Soporte Técnico de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${usuario}*) vence el ${fechaFormateada}.\n\n💳 Puedes procesar tu renovación rápida y segura aquí:\n${linkPagoSeguro}\n\n📺 *Tus Datos de Acceso (Guárdalos bien):*\n👤 *Usuario:* ${usuario}\n🔑 *Contraseña:* ${password}\n\n¡Mantén tu entretenimiento en 4K activo al instante! ✨`;
                         } else if (tipoMensaje === "VENCIDO") {
