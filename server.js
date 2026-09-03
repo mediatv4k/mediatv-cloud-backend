@@ -124,7 +124,6 @@ function getProp(obj, possibleKeys) {
     return null;
 }
 
-// Función maestra de barrido reutilizable tanto para el bot automático como para el botón manual
 async function ejecutarLogicaBarrido(whatsappClient, origenManual = false) {
     const adminRef = doc(db, 'mediatv_data', 'admin');
     const adminSnap = await getDoc(adminRef);
@@ -336,7 +335,6 @@ app.post(['/settings', '/api/settings', '/api/admin-config', '/admin-config'], a
     }
 });
 
-// NUEVO ENDPOINT: Permite forzar el barrido de cobros de inmediato con un clic desde el panel
 app.post(['/api/forzar-barrido', '/forzar-barrido'], async (req, res) => {
     try {
         if (!sock || !isConnected) {
