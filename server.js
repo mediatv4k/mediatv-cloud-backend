@@ -56,9 +56,6 @@ function addLog(text, type = "info") {
     if (cloudLogs.length > 50) cloudLogs.pop();
 }
 
-// ==========================================
-// FIREBASE FIRESTORE ADAPTER FOR BAILEYS
-// ==========================================
 function useFirestoreAuthState() {
     const writeData = async (data, id) => {
         try {
@@ -263,7 +260,6 @@ function iniciarMotorCobranzaCloud(whatsappClient) {
                     let enviar = false;
                     let tipoMensaje = "";
 
-                    // RANGO AMPLIADO: 0 a 5 días por vencer o hasta 5 días vencidos
                     if (diffDays >= 0 && diffDays <= 5) {
                         enviar = true;
                         tipoMensaje = "POR_VENCER";
@@ -343,9 +339,6 @@ function parseFechaExcel(val) {
     return null;
 }
 
-// ==========================================
-// ENDPOINTS DE LA API CLOUD
-// ==========================================
 app.post(['/api/admin-config', '/admin-config'], async (req, res) => {
     try {
         const { horaProgramada, estadoEnvio } = req.body;
@@ -357,6 +350,25 @@ app.post(['/api/admin-config', '/admin-config'], async (req, res) => {
         addLog(`⚙️ Hora configurada desde el panel: ${horaProgramada}`, "success");
         res.json({ success: true, message: "OK" });
     } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/enviar-notificacion', async (req, res) => {
+    try {
+        const { telefono, mensaje, usuario } = req.body;
+        if (!sock || !isConnected) {
+            return res.status(400).json({ success: false, error: "WhatsApp no conectado en la nube" });
+        }
+        let jid = String(telefono).replace(/\D/g, '');
+        if (!jid.startsWith('58')) jid = '58' + jid;
+        jid += '@s.whatsapp.net';
+
+        await sock.sendMessage(jid, { text: mensaje });
+        addLog(`📤 [PRUEBA] Enviado a ${usuario} (${telefono})`, "success");
+        res.json({ success: true, message: "Enviado con éxito" });
+    } catch (e) {
+        addLog(`❌ Error en envío de prueba: ${e.message}`, "error");
         res.status(500).json({ success: false, error: e.message });
     }
 });
