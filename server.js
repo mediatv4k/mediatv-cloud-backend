@@ -14,14 +14,21 @@ const {
 const { initializeApp } = require('firebase/app');
 const { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs } = require('firebase/firestore');
 
+// 🛡️ SOP v2.1 (Blindaje 2026-09-27): la config de Firebase ya NO se hardcodea.
+// Debe definirse en las variables de entorno del servicio (Render → Environment).
+// Ver .env.example para la lista completa y los valores previos como referencia.
 const firebaseConfig = {
-    apiKey: "AIzaSyCebbQ6exTiSQVsQk6Ub4hNZTZI0fNpxK8",
-    authDomain: "mediatv4k-30eb0.firebaseapp.com",
-    projectId: "mediatv4k-30eb0",
-    storageBucket: "mediatv4k-30eb0.firebasestorage.app",
-    messagingSenderId: "768500262681",
-    appId: "1:768500262681:web:9795dd138f947503e08788"
+    apiKey: process.env.FIREBASE_API_KEY,
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.FIREBASE_APP_ID
 };
+
+if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
+    console.error('❌ Faltan variables de entorno de Firebase (FIREBASE_API_KEY / FIREBASE_PROJECT_ID). Configúralas en Render antes de desplegar. Ver .env.example.');
+}
 
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
@@ -45,7 +52,9 @@ async function useFirestoreAuthState() {
         try {
             const jsonString = JSON.stringify(data, BufferJSON.replacer);
             await setDoc(doc(db, 'mediatv_data', `wa_session_${id}`), { data: jsonString });
-        } catch (e) {}
+        } catch (e) {
+            addLog(`❌ Error Firestore (writeData ${id}): ${e.message}`, 'error');
+        }
     };
 
     const readData = async (id) => {
@@ -54,6 +63,7 @@ async function useFirestoreAuthState() {
             if (!snap.exists()) return null;
             return JSON.parse(snap.data().data, BufferJSON.reviver);
         } catch (error) {
+            addLog(`❌ Error Firestore (readData ${id}): ${error.message}`, 'error');
             return null;
         }
     };
@@ -61,7 +71,9 @@ async function useFirestoreAuthState() {
     const removeData = async (id) => {
         try {
             await deleteDoc(doc(db, 'mediatv_data', `wa_session_${id}`));
-        } catch (error) {}
+        } catch (error) {
+            addLog(`❌ Error Firestore (removeData ${id}): ${error.message}`, 'error');
+        }
     };
 
     let creds = await readData('creds');
@@ -101,8 +113,38 @@ async function useFirestoreAuthState() {
 }
 
 const app = express();
-app.use(cors());
+
+// 🛡️ SOP v2.1 (Blindaje 2026-09-27): CORS restringido al frontend de producción.
+// En desarrollo (NODE_ENV !== 'production') también se acepta localhost para pruebas.
+const ORIGENES_PERMITIDOS = ['https://mediatv-4k.vercel.app'];
+if (process.env.NODE_ENV !== 'production') {
+    ORIGENES_PERMITIDOS.push('http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5500', 'http://127.0.0.1:5500');
+}
+app.use(cors({
+    origin: function (origin, callback) {
+        // Peticiones sin Origin (curl, health-checks de Render, la propia página /qr) se permiten:
+        // no son navegadores de terceros ejecutando fetch() cross-origin.
+        if (!origin || ORIGENES_PERMITIDOS.includes(origin)) return callback(null, true);
+        return callback(new Error('Origen no autorizado por CORS'));
+    }
+}));
 app.use(express.json());
+
+// 🛡️ SOP v2.1 (Blindaje 2026-09-27): middleware de autenticación por secreto compartido.
+// Exigido en todo POST administrativo y en GET /qr (que expone el código de vinculación).
+// El secreto viaja por header `x-api-key` (POST) o querystring `?token=` (GET /qr).
+function requireAdminSecret(req, res, next) {
+    const secretoConfigurado = process.env.ADMIN_API_SECRET;
+    if (!secretoConfigurado) {
+        console.error('❌ ADMIN_API_SECRET no está configurado en el entorno: todos los endpoints protegidos devuelven 403.');
+        return res.status(403).json({ success: false, error: 'Servidor mal configurado: falta ADMIN_API_SECRET' });
+    }
+    const recibido = req.get('x-api-key') || req.query.token;
+    if (recibido !== secretoConfigurado) {
+        return res.status(403).json({ success: false, error: 'Forbidden: secreto inválido o ausente' });
+    }
+    next();
+}
 
 const PORT = process.env.PORT || 10000;
 let sock = null;
@@ -320,7 +362,7 @@ async function startWhatsApp() {
 startWhatsApp();
 
 // NUEVO ENDPOINT DE EMERGENCIA: Limpia la sesión corrupta desde el panel frontal
-app.post(['/api/reset-whatsapp', '/reset-whatsapp'], async (req, res) => {
+app.post(['/api/reset-whatsapp', '/reset-whatsapp'], requireAdminSecret, async (req, res) => {
     try {
         addLog("♻️ Orden de reseteo recibida. Borrando caché...", "warning");
         const querySnapshot = await getDocs(collection(db, 'mediatv_data'));
@@ -348,7 +390,7 @@ app.post(['/api/reset-whatsapp', '/reset-whatsapp'], async (req, res) => {
     }
 });
 
-app.post(['/settings', '/api/settings', '/api/admin-config', '/admin-config'], async (req, res) => {
+app.post(['/settings', '/api/settings', '/api/admin-config', '/admin-config'], requireAdminSecret, async (req, res) => {
     try {
         const horaProgramada = req.body.horaProgramada || req.body.hour || "";
         const estadoEnvio = req.body.estadoEnvio || req.body.status || "Activo";
@@ -361,7 +403,7 @@ app.post(['/settings', '/api/settings', '/api/admin-config', '/admin-config'], a
     }
 });
 
-app.post(['/api/forzar-barrido', '/forzar-barrido'], async (req, res) => {
+app.post(['/api/forzar-barrido', '/forzar-barrido'], requireAdminSecret, async (req, res) => {
     try {
         if (!sock || !isConnected) {
             return res.status(400).json({ success: false, error: "WhatsApp no está conectado en la nube." });
@@ -374,7 +416,37 @@ app.post(['/api/forzar-barrido', '/forzar-barrido'], async (req, res) => {
     }
 });
 
-app.get(['/', '/status', '/api/status'], (req, res) => {
+// 🛡️ SOP v2.1 (Blindaje 2026-09-27): endpoint huérfano implementado. El frontend
+// (js/auth.js: mensaje de bienvenida al crear cuenta; js/ui.js: botón "Probar
+// Envío Real" de Configuración) ya llamaba a esta ruta, que no existía.
+app.post(['/api/enviar-notificacion'], requireAdminSecret, async (req, res) => {
+    try {
+        const telefono = req.body && req.body.telefono;
+        const mensaje = req.body && req.body.mensaje;
+        if (!telefono || !mensaje) {
+            return res.status(400).json({ success: false, error: "Faltan 'telefono' o 'mensaje' en el body" });
+        }
+        if (!sock || !isConnected) {
+            return res.status(503).json({ success: false, error: "WhatsApp no está conectado en la nube." });
+        }
+        const telefonoLimpio = String(telefono).replace(/\D/g, '');
+        if (telefonoLimpio.length < 10) {
+            return res.status(400).json({ success: false, error: "Número de teléfono inválido" });
+        }
+        const jid = telefonoLimpio.endsWith('@s.whatsapp.net') ? telefonoLimpio : `${telefonoLimpio}@s.whatsapp.net`;
+        await sock.sendMessage(jid, { text: String(mensaje) });
+        addLog(`✅ Notificación manual enviada a ${telefonoLimpio}`, "success");
+        res.json({ success: true, message: "Notificación enviada" });
+    } catch (e) {
+        addLog(`❌ Error en enviar-notificacion: ${e.message}`, "error");
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 🛡️ SOP v2.1 (Cierre de blindaje 2026-09-27): sellado total, sin excepción para
+// '/' — ver el aviso de riesgo operativo sobre el health-check de Render en el
+// reporte entregado junto con este cambio.
+app.get(['/', '/status', '/api/status'], requireAdminSecret, (req, res) => {
     res.json({
         status: isConnected ? "CONNECTED" : (qrImageBase64 ? "QR_READY" : "STARTING"),
         service: "MediaTV Cloud Bot 24/7",
@@ -382,11 +454,11 @@ app.get(['/', '/status', '/api/status'], (req, res) => {
     });
 });
 
-app.get(['/logs', '/api/logs'], (req, res) => {
+app.get(['/logs', '/api/logs'], requireAdminSecret, (req, res) => {
     res.json({ success: true, logs: cloudLogs });
 });
 
-app.get('/qr', (req, res) => {
+app.get('/qr', requireAdminSecret, (req, res) => {
     if (isConnected) {
         return res.send(`<h2 style="font-family:sans-serif;text-align:center;color:green;margin-top:20vh;">✅ WhatsApp Vinculado Exitosamente</h2>`);
     }
