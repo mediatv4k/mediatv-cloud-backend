@@ -219,13 +219,27 @@ async function ejecutarLogicaBarrido(whatsappClient, origenManual = false) {
         let mensaje = "";
         let tipoEnvio = "";
 
-        if (diffDays >= 0 && diffDays <= 5) {
-            tipoEnvio = "🟡 Por Vencer";
-            mensaje = `¡Hola ${nombre}! 👋 Te saluda el *Equipo de Soporte Técnico de MediaTV*.\n\nTe recordamos que tu servicio para el usuario (*${usuario}*) vence el ${fechaExpStr}.\n\n💳 Puedes procesar tu renovación rápida y segura aquí:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 *Tus Datos de Acceso (Guárdalos bien):*\n👤 *Usuario:* ${usuario}\n🔑 *Contraseña:* ${password}\n\n¡Mantén tu entretenimiento en 4K activo al instante! ✨`;
-        } else if (diffDays < 0 && Math.abs(diffDays) <= 5) {
-            const diasVencido = Math.abs(diffDays);
-            tipoEnvio = "🔴 Vencido Reciente";
-            mensaje = `¡Hola ${nombre}! 👋 Te saluda el *Equipo de Soporte Técnico de MediaTV*.\n\nTe informamos que tu servicio para el usuario (*${usuario}*) venció hace ${diasVencido} día(s) (el ${fechaExpStr}). ⚠️\n\n💳 Puedes procesar tu renovación rápida y segura aquí:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 *Tus Datos de Acceso (Guárdalos bien):*\n👤 *Usuario:* ${usuario}\n🔑 *Contraseña:* ${password}\n\n¡Reactiva tu entretenimiento en 4K al instante! ✨`;
+        // 🛡️ SOP v2.1 (2026-09-27): ventana de cobranza angosta a ±3 días (antes ±5) y
+        // copy dinámico de urgencia (días restantes / HOY / días vencidos), sin precios
+        // fijos. La lógica de fechas base (fechaExp, hoy, diffDays) NO se tocó.
+        if (diffDays >= -3 && diffDays <= 3) {
+            let fraseUrgencia;
+            let cierre;
+            if (diffDays > 0) {
+                tipoEnvio = "🟡 Por Vencer";
+                fraseUrgencia = `¡Te quedan *${diffDays} día${diffDays === 1 ? '' : 's'}* de servicio!`;
+                cierre = "¡Mantén tu entretenimiento en 4K activo al instante! ✨";
+            } else if (diffDays === 0) {
+                tipoEnvio = "🟡 Vence Hoy";
+                fraseUrgencia = `¡Tu servicio vence *HOY*!`;
+                cierre = "¡Mantén tu entretenimiento en 4K activo al instante! ✨";
+            } else {
+                const diasVencido = Math.abs(diffDays);
+                tipoEnvio = "🔴 Vencido Reciente";
+                fraseUrgencia = `Tu servicio venció hace *${diasVencido} día(s)* (el ${fechaExpStr}). ⚠️`;
+                cierre = "¡Reactiva tu entretenimiento en 4K al instante! ✨";
+            }
+            mensaje = `¡Hola ${nombre}! 👋 Te saluda el *Equipo de Soporte Técnico de MediaTV*.\n\n${fraseUrgencia}\n\n💳 Ingresa a tu taquilla virtual y renueva seleccionando el plan de tu preferencia:\nhttps://mediatv-4k.vercel.app/pay/${usuario}\n\n📺 *Tus Datos de Acceso (Guárdalos bien):*\n👤 *Usuario:* ${usuario}\n🔑 *Contraseña:* ${password}\n\n${cierre}`;
         }
 
         if (mensaje && telRaw) {
